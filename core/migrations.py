@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from core.database import connect, get_database_path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+
+def _table_columns(connection, table_name: str) -> set[str]:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def _ensure_column(connection, table_name: str, column_name: str, column_sql: str) -> None:
+    if column_name not in _table_columns(connection, table_name):
+        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
 
 
 def initialize_database() -> None:
@@ -97,19 +107,66 @@ def initialize_database() -> None:
             );
 
             CREATE TABLE IF NOT EXISTS import_runs (
-                import_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source TEXT NOT NULL,
-                mode TEXT NOT NULL,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                import_type TEXT NOT NULL DEFAULT '',
                 started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 finished_at TEXT,
                 status TEXT NOT NULL DEFAULT 'running',
+                requested_start TEXT,
+                requested_end TEXT,
+                total_found INTEGER NOT NULL DEFAULT 0,
+                total_inserted INTEGER NOT NULL DEFAULT 0,
+                total_updated INTEGER NOT NULL DEFAULT 0,
+                total_skipped INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT 'henrik',
+                mode TEXT NOT NULL DEFAULT '',
                 scanned_count INTEGER NOT NULL DEFAULT 0,
                 imported_count INTEGER NOT NULL DEFAULT 0,
                 updated_count INTEGER NOT NULL DEFAULT 0,
                 message TEXT NOT NULL DEFAULT ''
             );
+
+            CREATE TABLE IF NOT EXISTS henrik_raw_payloads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                match_id TEXT,
+                riot_name TEXT,
+                riot_tag TEXT,
+                region TEXT,
+                fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                payload_json TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                UNIQUE(endpoint, mode, match_id, payload_hash)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_henrik_raw_payloads_match_id
+            ON henrik_raw_payloads(match_id);
+
+            CREATE INDEX IF NOT EXISTS idx_henrik_raw_payloads_fetched_at
+            ON henrik_raw_payloads(fetched_at);
             """
         )
+
+        for column_name, column_sql in [
+            ("id", "id INTEGER"),
+            ("import_type", "import_type TEXT NOT NULL DEFAULT ''"),
+            ("requested_start", "requested_start TEXT"),
+            ("requested_end", "requested_end TEXT"),
+            ("total_found", "total_found INTEGER NOT NULL DEFAULT 0"),
+            ("total_inserted", "total_inserted INTEGER NOT NULL DEFAULT 0"),
+            ("total_updated", "total_updated INTEGER NOT NULL DEFAULT 0"),
+            ("total_skipped", "total_skipped INTEGER NOT NULL DEFAULT 0"),
+            ("error_message", "error_message TEXT NOT NULL DEFAULT ''"),
+        ]:
+            _ensure_column(connection, "import_runs", column_name, column_sql)
+
+        import_run_columns = _table_columns(connection, "import_runs")
+        if "id" in import_run_columns and "import_id" in import_run_columns:
+            connection.execute(
+                "UPDATE import_runs SET id = import_id WHERE id IS NULL AND import_id IS NOT NULL"
+            )
 
         connection.execute(
             "INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)",

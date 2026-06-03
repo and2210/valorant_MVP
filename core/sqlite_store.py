@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,11 @@ def _json_loads(value: str) -> dict[str, Any]:
         return data if isinstance(data, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+def _table_columns(connection, table_name: str) -> set[str]:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row["name"]) for row in rows}
 
 
 def _session_identity_key(session: DMResult) -> str:
@@ -42,6 +48,8 @@ def count_rows(table_name: str) -> int:
         "local_dm_sessions",
         "tracker_dm_matches",
         "tracker_ranked_matches",
+        "henrik_raw_payloads",
+        "import_runs",
         "wallet_state",
         "inventory_state",
     }:
@@ -51,6 +59,127 @@ def count_rows(table_name: str) -> int:
     with connect() as connection:
         row = connection.execute(f"SELECT COUNT(*) AS total FROM {table_name}").fetchone()
         return int(row["total"] if row else 0)
+
+
+def save_henrik_raw_payload(
+    *,
+    endpoint: str,
+    mode: str,
+    match_id: str,
+    riot_name: str,
+    riot_tag: str,
+    region: str,
+    payload: dict[str, Any],
+) -> None:
+    initialize_database()
+    payload_json = _json_dumps(payload)
+    payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+
+    with connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO henrik_raw_payloads (
+                endpoint, mode, match_id, riot_name, riot_tag, region, payload_json, payload_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(endpoint, mode, match_id, payload_hash) DO UPDATE SET
+                fetched_at = CURRENT_TIMESTAMP,
+                riot_name = excluded.riot_name,
+                riot_tag = excluded.riot_tag,
+                region = excluded.region,
+                payload_json = excluded.payload_json
+            """,
+            (
+                str(endpoint or ""),
+                str(mode or ""),
+                str(match_id or ""),
+                str(riot_name or ""),
+                str(riot_tag or ""),
+                str(region or ""),
+                payload_json,
+                payload_hash,
+            ),
+        )
+        connection.commit()
+
+
+def start_import_run(
+    *,
+    import_type: str,
+    requested_start: str = "",
+    requested_end: str = "",
+) -> int:
+    initialize_database()
+    with connect() as connection:
+        columns = _table_columns(connection, "import_runs")
+        connection.execute(
+            """
+            INSERT INTO import_runs (
+                import_type, source, mode, requested_start, requested_end, status
+            ) VALUES (?, 'henrik', ?, ?, ?, 'running')
+            """,
+            (
+                str(import_type or ""),
+                str(import_type or ""),
+                str(requested_start or ""),
+                str(requested_end or ""),
+            ),
+        )
+        run_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        if "id" in columns:
+            connection.execute("UPDATE import_runs SET id = ? WHERE rowid = ?", (run_id, run_id))
+        connection.commit()
+        return run_id
+
+
+def finish_import_run(
+    run_id: int,
+    *,
+    status: str,
+    total_found: int = 0,
+    total_inserted: int = 0,
+    total_updated: int = 0,
+    total_skipped: int = 0,
+    error_message: str = "",
+    scanned_count: int = 0,
+    message: str = "",
+) -> None:
+    if run_id <= 0:
+        return
+
+    initialize_database()
+    with connect() as connection:
+        connection.execute(
+            """
+            UPDATE import_runs SET
+                finished_at = CURRENT_TIMESTAMP,
+                status = ?,
+                total_found = ?,
+                total_inserted = ?,
+                total_updated = ?,
+                total_skipped = ?,
+                error_message = ?,
+                scanned_count = ?,
+                imported_count = ?,
+                updated_count = ?,
+                message = ?
+            WHERE id = ? OR rowid = ?
+            """,
+            (
+                str(status or ""),
+                int(total_found or 0),
+                int(total_inserted or 0),
+                int(total_updated or 0),
+                int(total_skipped or 0),
+                str(error_message or "")[:1000],
+                int(scanned_count or 0),
+                int(total_inserted or 0),
+                int(total_updated or 0),
+                str(message or ""),
+                int(run_id),
+                int(run_id),
+            ),
+        )
+        connection.commit()
 
 
 def save_wallet_to_db(wallet: dict[str, Any]) -> None:

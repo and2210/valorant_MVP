@@ -16,10 +16,13 @@ import requests
 from core.config import DATA_DIR, PROJECT_ROOT, load_config
 from core.models import to_float, to_int
 from core.sqlite_store import (
+    finish_import_run,
     load_tracker_dm_payloads_from_db,
     load_tracker_ranked_payloads_from_db,
     replace_tracker_dm_payloads,
     replace_tracker_ranked_payloads,
+    save_henrik_raw_payload,
+    start_import_run,
 )
 
 
@@ -375,6 +378,21 @@ def get_nested_name(value: Any) -> str:
 def get_match_id(match: dict[str, Any]) -> str:
     metadata = match.get("metadata", {}) if isinstance(match.get("metadata", {}), dict) else {}
     return clean_text(metadata.get("match_id") or metadata.get("matchid") or metadata.get("id") or match.get("match_id"))
+
+
+def save_raw_match_payload(settings: TrackerImportSettings, raw_match: dict[str, Any], mode: str) -> None:
+    try:
+        save_henrik_raw_payload(
+            endpoint="valorant/v4/matches",
+            mode=mode,
+            match_id=get_match_id(raw_match),
+            riot_name=settings.riot_name,
+            riot_tag=settings.riot_tag,
+            region=settings.region,
+            payload=raw_match,
+        )
+    except Exception as error:
+        print(f"[Raw Henrik] NÃ£o foi possÃ­vel salvar payload bruto: {error}")
 
 
 def get_map_name(match: dict[str, Any]) -> str:
@@ -1186,12 +1204,36 @@ def get_cached_match_detail(settings: TrackerImportSettings, match_id: str) -> d
             with raw_path.open("r", encoding="utf-8") as file:
                 payload = json.load(file)
             if isinstance(payload, dict):
+                try:
+                    save_henrik_raw_payload(
+                        endpoint="valorant/v4/match",
+                        mode="ranked_detail",
+                        match_id=match_id,
+                        riot_name=settings.riot_name,
+                        riot_tag=settings.riot_tag,
+                        region=settings.region,
+                        payload=payload,
+                    )
+                except Exception:
+                    pass
                 return payload
         except Exception:
             pass
 
     url = build_match_detail_url(settings, match_id)
     payload = request_json_url(settings, url, raw_filename=f"ranked_match_detail_{safe_id}.json", label="Ranked detalhe")
+    try:
+        save_henrik_raw_payload(
+            endpoint="valorant/v4/match",
+            mode="ranked_detail",
+            match_id=match_id,
+            riot_name=settings.riot_name,
+            riot_tag=settings.riot_tag,
+            region=settings.region,
+            payload=payload,
+        )
+    except Exception as error:
+        print(f"[Raw Henrik] NÃ£o foi possÃ­vel salvar detalhe bruto: {error}")
     if settings.request_delay_seconds > 0:
         time.sleep(settings.request_delay_seconds)
     return payload
@@ -1618,6 +1660,7 @@ def import_deathmatch_from_tracker(
     filter_start = normalize_date_filter(start_date)
     filter_end = normalize_date_filter(end_date)
     has_date_filter = bool(filter_start or filter_end)
+    run_id = start_import_run(import_type="deathmatch", requested_start=filter_start, requested_end=filter_end)
 
     max_scan = settings.max_scan_matches if (import_all or has_date_filter) else max(int(limit or settings.import_limit) * 6, 40)
     max_scan = max(max_scan, settings.batch_size)
@@ -1648,7 +1691,20 @@ def import_deathmatch_from_tracker(
     while scanned_count < max_scan:
         remaining_scan = max_scan - scanned_count
         batch_size = min(settings.batch_size, remaining_scan)
-        batch = request_matches(settings, start=start, size=batch_size)
+        try:
+            batch = request_matches(settings, start=start, size=batch_size)
+        except Exception as error:
+            finish_import_run(
+                run_id,
+                status="failed",
+                total_found=deathmatch_found_count,
+                total_inserted=imported_count,
+                total_updated=updated_count,
+                total_skipped=max(deathmatch_found_count - imported_count - updated_count, 0),
+                scanned_count=scanned_count,
+                error_message=str(error),
+            )
+            raise
         if not batch:
             break
 
@@ -1658,6 +1714,7 @@ def import_deathmatch_from_tracker(
         for raw_match in batch:
             if not isinstance(raw_match, dict):
                 continue
+            save_raw_match_payload(settings, raw_match, "deathmatch")
             parsed = parse_tracker_dm_match(raw_match, settings)
             if parsed is None:
                 continue
@@ -1720,8 +1777,31 @@ def import_deathmatch_from_tracker(
             time.sleep(settings.request_delay_seconds)
 
     all_matches = sorted(matches_by_id.values(), key=lambda item: item.date, reverse=True)
-    save_tracker_dm_matches(all_matches)
+    try:
+        save_tracker_dm_matches(all_matches)
+    except Exception as error:
+        finish_import_run(
+            run_id,
+            status="failed",
+            total_found=deathmatch_found_count,
+            total_inserted=imported_count,
+            total_updated=updated_count,
+            total_skipped=max(deathmatch_found_count - imported_count - updated_count, 0),
+            scanned_count=scanned_count,
+            error_message=str(error),
+        )
+        raise
     percent = round(min((scanned_count / max_scan) * 100, 100), 1)
+    finish_import_run(
+        run_id,
+        status="success",
+        total_found=deathmatch_found_count,
+        total_inserted=imported_count,
+        total_updated=updated_count,
+        total_skipped=max(deathmatch_found_count - imported_count - updated_count, 0),
+        scanned_count=scanned_count,
+        message=f"DM import: {imported_count} inserted, {updated_count} updated",
+    )
 
     return TrackerImportResult(
         imported_count=imported_count,
@@ -2118,6 +2198,7 @@ def import_ranked_from_tracker(
     filter_start = normalize_date_filter(start_date)
     filter_end = normalize_date_filter(end_date)
     has_date_filter = bool(filter_start or filter_end)
+    run_id = start_import_run(import_type="ranked", requested_start=filter_start, requested_end=filter_end)
 
     max_scan = settings.max_scan_matches if (import_all or has_date_filter) else max(int(limit or settings.import_limit) * 8, 60)
     max_scan = max(max_scan, settings.batch_size)
@@ -2152,7 +2233,20 @@ def import_ranked_from_tracker(
     while scanned_count < max_scan:
         remaining_scan = max_scan - scanned_count
         batch_size = min(settings.batch_size, remaining_scan)
-        batch = request_matches(settings, start=start, size=batch_size)
+        try:
+            batch = request_matches(settings, start=start, size=batch_size)
+        except Exception as error:
+            finish_import_run(
+                run_id,
+                status="failed",
+                total_found=ranked_found_count,
+                total_inserted=imported_count,
+                total_updated=updated_count,
+                total_skipped=max(ranked_found_count - imported_count - updated_count, 0),
+                scanned_count=scanned_count,
+                error_message=str(error),
+            )
+            raise
         if not batch:
             break
 
@@ -2162,6 +2256,7 @@ def import_ranked_from_tracker(
         for raw_match in batch:
             if not isinstance(raw_match, dict):
                 continue
+            save_raw_match_payload(settings, raw_match, "ranked")
             parsed = parse_tracker_ranked_match(raw_match, settings)
             if parsed is None:
                 continue
@@ -2223,8 +2318,31 @@ def import_ranked_from_tracker(
             time.sleep(settings.request_delay_seconds)
 
     all_matches = sorted(matches_by_id.values(), key=lambda item: item.date, reverse=True)
-    save_tracker_ranked_matches(all_matches)
+    try:
+        save_tracker_ranked_matches(all_matches)
+    except Exception as error:
+        finish_import_run(
+            run_id,
+            status="failed",
+            total_found=ranked_found_count,
+            total_inserted=imported_count,
+            total_updated=updated_count,
+            total_skipped=max(ranked_found_count - imported_count - updated_count, 0),
+            scanned_count=scanned_count,
+            error_message=str(error),
+        )
+        raise
     percent = round(min((scanned_count / max_scan) * 100, 100), 1)
+    finish_import_run(
+        run_id,
+        status="success",
+        total_found=ranked_found_count,
+        total_inserted=imported_count,
+        total_updated=updated_count,
+        total_skipped=max(ranked_found_count - imported_count - updated_count, 0),
+        scanned_count=scanned_count,
+        message=f"Ranked import: {imported_count} inserted, {updated_count} updated",
+    )
 
     return TrackerImportResult(
         imported_count=imported_count,
