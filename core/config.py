@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -21,6 +22,7 @@ WALLET_FILE = DATA_DIR / "wallet.json"
 SESSIONS_FILE = DATA_DIR / "sessions.csv"
 INVENTORY_FILE = DATA_DIR / "inventory.json"
 CONFIG_FILE = DATA_DIR / "config.json"
+ENV_FILE = PROJECT_ROOT / ".env"
 
 DEFAULT_WEAPONS = {
     "0": {"name": "Classic", "cost": 0},
@@ -256,6 +258,76 @@ def ensure_data_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def read_env_file() -> dict[str, str]:
+    if not ENV_FILE.exists():
+        return {}
+
+    result: dict[str, str] = {}
+    with ENV_FILE.open("r", encoding="utf-8") as file:
+        for line in file:
+            text = line.strip()
+            if not text or text.startswith("#") or "=" not in text:
+                continue
+            key, value = text.split("=", 1)
+            result[key.strip()] = value.strip().strip('"').strip("'")
+    return result
+
+
+def write_env_value(key: str, value: str) -> None:
+    key = str(key or "").strip()
+    value = str(value or "").strip()
+    if not key or not value:
+        return
+
+    lines = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+    updated = False
+    result: list[str] = []
+    for line in lines:
+        if line.strip().startswith(f"{key}="):
+            result.append(f"{key}={value}")
+            updated = True
+        else:
+            result.append(line)
+
+    if not updated:
+        result.append(f"{key}={value}")
+
+    ENV_FILE.write_text("\n".join(result).rstrip() + "\n", encoding="utf-8")
+
+
+def get_henrik_api_key(config_data: dict[str, Any] | None = None) -> str:
+    env_value = os.getenv("HENRIK_API_KEY", "").strip()
+    if env_value:
+        return env_value
+
+    env_file_value = read_env_file().get("HENRIK_API_KEY", "").strip()
+    if env_file_value:
+        return env_file_value
+
+    if isinstance(config_data, dict):
+        tracker = config_data.get("tracker", {})
+        if isinstance(tracker, dict):
+            return str(tracker.get("api_key") or "").strip()
+    return ""
+
+
+def migrate_henrik_api_key_to_env(config_data: dict[str, Any]) -> bool:
+    tracker = config_data.get("tracker", {})
+    if not isinstance(tracker, dict):
+        return False
+
+    legacy_key = str(tracker.get("api_key") or "").strip()
+    if not legacy_key:
+        tracker["api_key"] = ""
+        return False
+
+    if not os.getenv("HENRIK_API_KEY", "").strip() and not read_env_file().get("HENRIK_API_KEY", "").strip():
+        write_env_value("HENRIK_API_KEY", legacy_key)
+
+    tracker["api_key"] = ""
+    return True
+
+
 def default_config_dict() -> dict[str, Any]:
     return AppConfig().to_dict()
 
@@ -281,6 +353,7 @@ def load_config() -> AppConfig:
         save_config(config)
         return config
 
+    migrate_henrik_api_key_to_env(raw_data)
     config = AppConfig.from_dict(raw_data)
 
     # Regrava com campos novos caso o arquivo seja de uma versão antiga.
@@ -290,6 +363,8 @@ def load_config() -> AppConfig:
 
 def save_config(config: AppConfig) -> None:
     ensure_data_dir()
+    payload = config.to_dict()
+    migrate_henrik_api_key_to_env(payload)
 
     with CONFIG_FILE.open("w", encoding="utf-8") as file:
-        json.dump(config.to_dict(), file, ensure_ascii=False, indent=4)
+        json.dump(payload, file, ensure_ascii=False, indent=4)

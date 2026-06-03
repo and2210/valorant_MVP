@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 import requests
 
-from core.config import DATA_DIR, PROJECT_ROOT, load_config
+from core.config import DATA_DIR, get_henrik_api_key, load_config, read_env_file
 from core.models import to_float, to_int
 from core.sqlite_store import (
     finish_import_run,
@@ -184,22 +184,6 @@ class TrainingDayStats:
     weapons: str = ""
 
 
-def read_env_file() -> dict[str, str]:
-    env_path = PROJECT_ROOT / ".env"
-    if not env_path.exists():
-        return {}
-
-    result: dict[str, str] = {}
-    with env_path.open("r", encoding="utf-8") as file:
-        for line in file:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            result[key.strip()] = value.strip().strip('"').strip("'")
-    return result
-
-
 def get_tracker_settings() -> TrackerImportSettings:
     config = load_config()
     tracker = getattr(config, "tracker", {})
@@ -217,7 +201,7 @@ def get_tracker_settings() -> TrackerImportSettings:
         riot_tag=str(tracker.get("riot_tag") or env_file.get("RIOT_TAG") or os.getenv("RIOT_TAG", "")).strip(),
         region=str(tracker.get("region") or env_file.get("REGION") or os.getenv("REGION", "br")).strip() or "br",
         platform=str(tracker.get("platform") or env_file.get("PLATFORM") or os.getenv("PLATFORM", "pc")).strip() or "pc",
-        api_key=str(tracker.get("api_key") or env_file.get("HENRIK_API_KEY") or os.getenv("HENRIK_API_KEY", "")).strip(),
+        api_key=get_henrik_api_key({"tracker": tracker}),
         import_limit=max(to_int(tracker.get("import_limit"), 20), 1),
         request_delay_seconds=max(to_float(tracker.get("request_delay_seconds"), 1.5), 0.0),
         max_scan_matches=max(to_int(tracker.get("max_scan_matches"), 500), 10),

@@ -577,11 +577,8 @@ class MainWindow(QWidget):
         )
 
     def refresh_api_key_status(self) -> None:
-        config_key = self.setting_api_key.text().strip()
         active_settings = get_tracker_settings()
-        if config_key:
-            self.setting_api_key_status.setText("Chave Henrik: configurada no app")
-        elif active_settings.api_key:
+        if active_settings.api_key:
             self.setting_api_key_status.setText("Chave Henrik: usando .env/variável de ambiente")
         else:
             self.setting_api_key_status.setText("Chave Henrik: ausente")
@@ -617,7 +614,7 @@ class MainWindow(QWidget):
         self.setting_riot_tag.setText(str(tracker_settings.get("riot_tag", "")))
         self.setting_region.setText(str(tracker_settings.get("region", "br")))
         self.setting_platform.setText(str(tracker_settings.get("platform", "pc")))
-        self.setting_api_key.setText(str(tracker_settings.get("api_key", "")))
+        self.setting_api_key.setText("")
         self.setting_show_api_key.setChecked(False)
         self.toggle_api_key_visibility(False)
         self.refresh_api_key_status()

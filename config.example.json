@@ -1,0 +1,42 @@
+{
+    "episode_timeout": 1.25,
+    "post_click_cooldown": 0.25,
+    "require_release_at_click": false,
+    "kcred_per_clean_hit": 10,
+    "kcred_penalty_brake_error": 5,
+    "kcred_penalty_diagonal_error": 5,
+    "kcred_penalty_no_ad_error": 5,
+    "stationary_click_counts_clean": true,
+    "stationary_min_release_seconds": 0.1,
+    "xp_per_clean_hit": 2,
+    "xp_per_level": 5000,
+    "default_starting_balance": 0,
+    "default_next_weapon": "Classic",
+    "tracker": {
+        "riot_name": "",
+        "riot_tag": "",
+        "region": "br",
+        "platform": "pc",
+        "api_key": "",
+        "import_limit": 20,
+        "request_delay_seconds": 1.5,
+        "max_scan_matches": 2500,
+        "batch_size": 10,
+        "consecutive_empty_limit": 8,
+        "ranked_detail_enrichment": true
+    },
+    "training_calendar": {
+        "daily_goal_hours": 2.0,
+        "light_day_hours": 0.5,
+        "medium_day_hours": 1.0,
+        "strong_day_hours": 2.0,
+        "export_filename": "training_calendar_month.csv"
+    },
+    "input_timing": {
+        "enabled": true,
+        "tap_max_seconds": 0.12,
+        "burst_max_seconds": 0.5,
+        "crouch_fire_max_seconds": 0.5,
+        "action_map": {}
+    }
+}

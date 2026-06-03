@@ -14,6 +14,7 @@ data/*.db
 data/*.sqlite
 data/*.sqlite3
 data/tracker_raw/
+data/tracker_*.csv
 data/tracker_dm_cache.json
 data/tracker_ranked_cache.json
 data/tracker_dm_matches.csv
