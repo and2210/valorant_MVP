@@ -52,6 +52,50 @@ class GuiSignals(QObject):
     shutdown_requested = Signal()
 
 
+TRAINING_METHODS = [
+    {
+        "id": "first_shot_hs",
+        "name": "Primeiro tiro / HS Only",
+        "description": "Bloco focado em disciplina de primeiro disparo, mira na cabeça e decisão curta antes do clique.",
+        "weapons": "Sheriff, Guardian, Vandal",
+        "rules": "Priorizar um disparo limpo por duelo. Evitar spray longo. Reposicionar depois de errar o primeiro tiro.",
+        "metrics": "Acertos limpos, erros de freio, tiros W/S, tap count e taxa atual.",
+    },
+    {
+        "id": "burst_control",
+        "name": "Burst Control",
+        "description": "Bloco para controlar rajadas curtas e resetar antes que o spray vire automático.",
+        "weapons": "Vandal, Phantom, Bulldog",
+        "rules": "Usar rajadas curtas. Soltar movimento antes de atirar. Pausar entre bursts para recuperar precisão.",
+        "metrics": "Burst count, duração média do tiro, erros sem A/D e taxa atual.",
+    },
+    {
+        "id": "spray_transfer",
+        "name": "Spray Control / Transfer",
+        "description": "Bloco para treinar controle de spray, troca de alvo e estabilidade em sequência.",
+        "weapons": "Phantom, Vandal, Odin",
+        "rules": "Aceitar sprays mais longos apenas quando houver múltiplos alvos. Evitar crouch longo automático.",
+        "metrics": "Spray longo, duração máxima do tiro, crouch+tiro e KCred da sessão.",
+    },
+    {
+        "id": "crosshair_placement",
+        "name": "Crosshair Placement",
+        "description": "Bloco para manter mira pré-posicionada e reduzir correções grandes antes do duelo.",
+        "weapons": "Vandal, Phantom, Guardian",
+        "rules": "Entrar nos ângulos com mira pronta. Evitar diagonais longas. Clicar só quando o freio estiver estável.",
+        "metrics": "Erros de diagonal, erros de freio, acertos limpos e taxa atual.",
+    },
+    {
+        "id": "recovery_dm",
+        "name": "DM de Recuperação",
+        "description": "Bloco leve para recuperar ritmo sem forçar volume ou penalizar demais a tomada de decisão.",
+        "weapons": "Classic, Ghost, Vandal",
+        "rules": "Reduzir pressa. Buscar duelos simples. Encerrar o bloco se a execução continuar degradando.",
+        "metrics": "Taxa atual, cliques ignorados, input timing geral e KCred da sessão.",
+    },
+]
+
+
 class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -94,23 +138,13 @@ class MainWindow(QWidget):
         self.status_label = QLabel("Status: DESLIGADO")
         root.addWidget(self.status_label)
 
-        button_row = QHBoxLayout()
-        self.start_button = QPushButton("Iniciar DM (F10)")
-        self.finish_button = QPushButton("Encerrar DM (F10)")
-        self.reset_button = QPushButton("Resetar contadores (F9)")
-        self.refresh_button = QPushButton("Atualizar (F6)")
-        self.finish_button.setEnabled(False)
-        button_row.addWidget(self.start_button)
-        button_row.addWidget(self.finish_button)
-        button_row.addWidget(self.reset_button)
-        button_row.addWidget(self.refresh_button)
-        root.addLayout(button_row)
-
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_dm_tab(), "DM atual / Dashboard")
-        self.tabs.addTab(self._build_tracker_tab(), "Tracker / DMs reais")
-        self.tabs.addTab(self._build_radiante_tab(), "Radiante / Ranked")
+        self.tabs.addTab(self._build_dm_tab(), "Hoje / Treino")
+        self.tabs.addTab(self._build_radiante_tab(), "Ranked")
+        self.tabs.addTab(self._build_import_tab(), "Importação")
         self.tabs.addTab(self._build_calendar_tab(), "Calendário")
+        self.tabs.addTab(self._build_economy_tab(), "Economia / KCred")
+        self.tabs.addTab(self._build_history_tab(), "Histórico")
         self.tabs.addTab(self._build_settings_tab(), "Configurações")
         root.addWidget(self.tabs, stretch=1)
 
@@ -118,17 +152,6 @@ class MainWindow(QWidget):
         line.setFrameShape(QFrame.HLine)
         line.setFrameShadow(QFrame.Sunken)
         root.addWidget(line)
-
-        info_group = QGroupBox("Importação Tracker")
-        info_layout = QHBoxLayout(info_group)
-        self.info_tracker_label = QLabel("Tracker: pronto")
-        self.info_tracker_progress_bar = QProgressBar()
-        self.info_tracker_progress_bar.setRange(0, 1000)
-        self.info_tracker_progress_bar.setValue(0)
-        self.info_tracker_progress_bar.setFormat("0.0%")
-        info_layout.addWidget(self.info_tracker_label)
-        info_layout.addWidget(self.info_tracker_progress_bar, stretch=1)
-        root.addWidget(info_group)
 
         self.setStyleSheet(
             """
@@ -149,32 +172,58 @@ class MainWindow(QWidget):
         tab = QWidget()
         root = QVBoxLayout(tab)
 
-        dashboard_group = QGroupBox("Dashboard local")
-        dashboard_layout = QGridLayout(dashboard_group)
+        button_row = QHBoxLayout()
+        self.start_button = QPushButton("Iniciar DM (F10)")
+        self.finish_button = QPushButton("Encerrar DM (F10)")
+        self.reset_button = QPushButton("Resetar contadores (F9)")
+        self.refresh_button = QPushButton("Atualizar (F6)")
+        self.finish_button.setEnabled(False)
+        button_row.addWidget(self.start_button)
+        button_row.addWidget(self.finish_button)
+        button_row.addWidget(self.reset_button)
+        button_row.addWidget(self.refresh_button)
+        button_row.addStretch(1)
+        root.addLayout(button_row)
 
-        self.level_label = QLabel("Nível: -")
-        self.xp_label = QLabel("XP: -")
-        self.xp_bar = QProgressBar()
-        self.xp_bar.setRange(0, 1000)
-        self.xp_bar.setValue(0)
-        self.xp_bar.setTextVisible(True)
-        self.balance_label = QLabel("Saldo: -")
-        self.next_weapon_label = QLabel("Próxima arma: -")
-        self.total_sessions_label = QLabel("Sessões totais: -")
-        self.avg_rate_label = QLabel("Taxa média geral: -")
-        self.best_weapon_label = QLabel("Melhor arma: -")
-        self.today_label = QLabel("Hoje: -")
+        block_group = QGroupBox("Bloco atual")
+        block_layout = QVBoxLayout(block_group)
 
-        dashboard_layout.addWidget(self.level_label, 0, 0)
-        dashboard_layout.addWidget(self.xp_label, 0, 1)
-        dashboard_layout.addWidget(self.xp_bar, 1, 0, 1, 2)
-        dashboard_layout.addWidget(self.balance_label, 2, 0)
-        dashboard_layout.addWidget(self.next_weapon_label, 2, 1)
-        dashboard_layout.addWidget(self.total_sessions_label, 3, 0)
-        dashboard_layout.addWidget(self.avg_rate_label, 3, 1)
-        dashboard_layout.addWidget(self.best_weapon_label, 4, 0)
-        dashboard_layout.addWidget(self.today_label, 4, 1)
-        root.addWidget(dashboard_group)
+        mode_row = QHBoxLayout()
+        self.block_mode_combo = QComboBox()
+        self.block_mode_combo.addItem("Treino em DM", "dm_training")
+        self.block_mode_combo.addItem("Ranked", "ranked")
+        self.training_method_combo = QComboBox()
+        for method in TRAINING_METHODS:
+            self.training_method_combo.addItem(method["name"], method["id"])
+        mode_row.addWidget(QLabel("Modo do bloco:"))
+        mode_row.addWidget(self.block_mode_combo)
+        mode_row.addWidget(QLabel("Método de treino:"))
+        mode_row.addWidget(self.training_method_combo, stretch=1)
+        block_layout.addLayout(mode_row)
+
+        self.training_method_group = QGroupBox("Método de treino")
+        method_layout = QGridLayout(self.training_method_group)
+        self.training_method_description_label = QLabel("-")
+        self.training_method_weapons_label = QLabel("-")
+        self.training_method_rules_label = QLabel("-")
+        self.training_method_metrics_label = QLabel("-")
+        for label in (
+            self.training_method_description_label,
+            self.training_method_weapons_label,
+            self.training_method_rules_label,
+            self.training_method_metrics_label,
+        ):
+            label.setWordWrap(True)
+        method_layout.addWidget(QLabel("Descrição:"), 0, 0)
+        method_layout.addWidget(self.training_method_description_label, 0, 1)
+        method_layout.addWidget(QLabel("Armas recomendadas:"), 1, 0)
+        method_layout.addWidget(self.training_method_weapons_label, 1, 1)
+        method_layout.addWidget(QLabel("Regras fixas:"), 2, 0)
+        method_layout.addWidget(self.training_method_rules_label, 2, 1)
+        method_layout.addWidget(QLabel("Métricas observadas:"), 3, 0)
+        method_layout.addWidget(self.training_method_metrics_label, 3, 1)
+        block_layout.addWidget(self.training_method_group)
+        root.addWidget(block_group)
 
         live_group = QGroupBox("Sessão atual")
         live_layout = QGridLayout(live_group)
@@ -216,29 +265,27 @@ class MainWindow(QWidget):
         input_layout.addWidget(self.input_actions_label, 3, 1)
         root.addWidget(input_group)
 
-        purchase_group = QGroupBox("Compra da próxima arma")
-        purchase_layout = QHBoxLayout(purchase_group)
-        self.weapon_combo = QComboBox()
-        self.weapon_combo.setMinimumWidth(320)
-        self.weapon_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.weapon_combo.setMinimumContentsLength(28)
-        self.confirm_purchase_button = QPushButton("Confirmar compra")
-        self.purchase_status_label = QLabel("Finalize uma sessão para liberar a compra.")
-
-        self.weapon_combo.setEnabled(False)
-        self.confirm_purchase_button.setEnabled(False)
-
-        purchase_layout.addWidget(self.weapon_combo, stretch=1)
-        purchase_layout.addWidget(self.confirm_purchase_button)
-        purchase_layout.addWidget(self.purchase_status_label, stretch=2)
-        root.addWidget(purchase_group)
         root.addStretch(1)
+        self.update_training_method_panel()
         return tab
 
-    def _build_tracker_tab(self) -> QWidget:
+    def _build_import_tab(self) -> QWidget:
         tab = QWidget()
         root = QVBoxLayout(tab)
 
+        status_group = QGroupBox("Status da importação")
+        status_layout = QHBoxLayout(status_group)
+        self.info_tracker_label = QLabel("Tracker: pronto")
+        self.info_tracker_progress_bar = QProgressBar()
+        self.info_tracker_progress_bar.setRange(0, 1000)
+        self.info_tracker_progress_bar.setValue(0)
+        self.info_tracker_progress_bar.setFormat("0.0%")
+        status_layout.addWidget(self.info_tracker_label)
+        status_layout.addWidget(self.info_tracker_progress_bar, stretch=1)
+        root.addWidget(status_group)
+
+        dm_group = QGroupBox("Deathmatch / Tracker")
+        dm_layout = QVBoxLayout(dm_group)
         actions = QHBoxLayout()
         self.import_tracker_button = QPushButton("Importar DMs")
         self.import_all_tracker_checkbox = QCheckBox("Importar todos dentro do limite")
@@ -262,38 +309,12 @@ class MainWindow(QWidget):
         actions.addWidget(self.import_day_button)
         actions.addWidget(self.import_range_button)
         actions.addStretch(1)
-        root.addLayout(actions)
+        dm_layout.addLayout(actions)
+        root.addWidget(dm_group)
 
-        tracker_group = QGroupBox("Estatísticas reais importadas")
-        tracker_layout = QGridLayout(tracker_group)
-        self.tracker_total_label = QLabel("DMs importados: 0")
-        self.tracker_kd_label = QLabel("KD médio: -")
-        self.tracker_best_map_label = QLabel("Melhor mapa: -")
-        self.tracker_best_agent_label = QLabel("Melhor agente: -")
-        self.tracker_best_match_label = QLabel("Melhor DM: -")
-        self.tracker_last_match_label = QLabel("Último DM: -")
-
-        tracker_layout.addWidget(self.tracker_total_label, 0, 0)
-        tracker_layout.addWidget(self.tracker_kd_label, 0, 1)
-        tracker_layout.addWidget(self.tracker_best_map_label, 1, 0)
-        tracker_layout.addWidget(self.tracker_best_agent_label, 1, 1)
-        tracker_layout.addWidget(self.tracker_best_match_label, 2, 0)
-        tracker_layout.addWidget(self.tracker_last_match_label, 2, 1)
-        root.addWidget(tracker_group)
-
-        self.tracker_table = QTableWidget(0, 10)
-        self.tracker_table.setHorizontalHeaderLabels([
-            "Data", "Mapa", "Agente", "K", "D", "A", "KD", "Duração", "Arma", "Protocolo"
-        ])
-        self.tracker_table.setMinimumHeight(260)
-        root.addWidget(self.tracker_table, stretch=1)
-        return tab
-
-    def _build_radiante_tab(self) -> QWidget:
-        tab = QWidget()
-        root = QVBoxLayout(tab)
-
-        actions = QHBoxLayout()
+        ranked_group = QGroupBox("Ranked / Competitive")
+        ranked_layout = QVBoxLayout(ranked_group)
+        ranked_actions = QHBoxLayout()
         self.import_ranked_button = QPushButton("Importar Rankeds")
         self.import_all_ranked_checkbox = QCheckBox("Importar todas dentro do limite")
         self.import_all_ranked_checkbox.setChecked(True)
@@ -308,18 +329,26 @@ class MainWindow(QWidget):
         self.ranked_to_date.setDisplayFormat("yyyy-MM-dd")
         self.ranked_to_date.setDate(QDate.currentDate())
 
-        actions.addWidget(self.import_ranked_button)
-        actions.addWidget(self.import_all_ranked_checkbox)
-        actions.addWidget(QLabel("De:"))
-        actions.addWidget(self.ranked_from_date)
-        actions.addWidget(QLabel("Até:"))
-        actions.addWidget(self.ranked_to_date)
-        actions.addWidget(self.import_ranked_day_button)
-        actions.addWidget(self.import_ranked_range_button)
-        actions.addStretch(1)
-        root.addLayout(actions)
+        ranked_actions.addWidget(self.import_ranked_button)
+        ranked_actions.addWidget(self.import_all_ranked_checkbox)
+        ranked_actions.addWidget(QLabel("De:"))
+        ranked_actions.addWidget(self.ranked_from_date)
+        ranked_actions.addWidget(QLabel("Até:"))
+        ranked_actions.addWidget(self.ranked_to_date)
+        ranked_actions.addWidget(self.import_ranked_day_button)
+        ranked_actions.addWidget(self.import_ranked_range_button)
+        ranked_actions.addStretch(1)
+        ranked_layout.addLayout(ranked_actions)
+        root.addWidget(ranked_group)
 
-        summary_group = QGroupBox("Radiante — análise competitiva")
+        root.addStretch(1)
+        return tab
+
+    def _build_radiante_tab(self) -> QWidget:
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+
+        summary_group = QGroupBox("Ranked — análise competitiva")
         summary_layout = QGridLayout(summary_group)
         self.ranked_total_label = QLabel("Rankeds: 0")
         self.ranked_winrate_label = QLabel("Winrate: -")
@@ -404,6 +433,101 @@ class MainWindow(QWidget):
         self.training_days_summary_table.setMinimumHeight(130)
         calendar_layout.addWidget(self.training_days_summary_table)
         root.addWidget(calendar_group, stretch=1)
+        return tab
+
+    def _build_economy_tab(self) -> QWidget:
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+
+        progress_group = QGroupBox("Saldo e progressão")
+        progress_layout = QGridLayout(progress_group)
+        self.level_label = QLabel("Nível: -")
+        self.xp_label = QLabel("XP: -")
+        self.xp_bar = QProgressBar()
+        self.xp_bar.setRange(0, 1000)
+        self.xp_bar.setValue(0)
+        self.xp_bar.setTextVisible(True)
+        self.balance_label = QLabel("Saldo: -")
+        self.next_weapon_label = QLabel("Próxima arma: -")
+        self.total_sessions_label = QLabel("Sessões totais: -")
+
+        progress_layout.addWidget(self.level_label, 0, 0)
+        progress_layout.addWidget(self.xp_label, 0, 1)
+        progress_layout.addWidget(self.xp_bar, 1, 0, 1, 2)
+        progress_layout.addWidget(self.balance_label, 2, 0)
+        progress_layout.addWidget(self.next_weapon_label, 2, 1)
+        progress_layout.addWidget(self.total_sessions_label, 3, 0)
+        root.addWidget(progress_group)
+
+        purchase_group = QGroupBox("Compra da próxima arma")
+        purchase_layout = QHBoxLayout(purchase_group)
+        self.weapon_combo = QComboBox()
+        self.weapon_combo.setMinimumWidth(320)
+        self.weapon_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.weapon_combo.setMinimumContentsLength(28)
+        self.confirm_purchase_button = QPushButton("Confirmar compra")
+        self.purchase_status_label = QLabel("Finalize uma sessão para liberar a compra.")
+
+        self.weapon_combo.setEnabled(False)
+        self.confirm_purchase_button.setEnabled(False)
+
+        purchase_layout.addWidget(self.weapon_combo, stretch=1)
+        purchase_layout.addWidget(self.confirm_purchase_button)
+        purchase_layout.addWidget(self.purchase_status_label, stretch=2)
+        root.addWidget(purchase_group)
+
+        rules_group = QGroupBox("Regras econômicas atuais")
+        rules_layout = QGridLayout(rules_group)
+        self.kcred_rules_label = QLabel("-")
+        self.xp_rules_label = QLabel("-")
+        self.kcred_rules_label.setWordWrap(True)
+        self.xp_rules_label.setWordWrap(True)
+        rules_layout.addWidget(QLabel("KCred:"), 0, 0)
+        rules_layout.addWidget(self.kcred_rules_label, 0, 1)
+        rules_layout.addWidget(QLabel("XP:"), 1, 0)
+        rules_layout.addWidget(self.xp_rules_label, 1, 1)
+        root.addWidget(rules_group)
+
+        root.addStretch(1)
+        return tab
+
+    def _build_history_tab(self) -> QWidget:
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+
+        history_group = QGroupBox("Histórico local")
+        history_layout = QGridLayout(history_group)
+        self.avg_rate_label = QLabel("Taxa média geral: -")
+        self.best_weapon_label = QLabel("Melhor arma: -")
+        self.today_label = QLabel("Hoje: -")
+        history_layout.addWidget(self.avg_rate_label, 0, 0)
+        history_layout.addWidget(self.best_weapon_label, 0, 1)
+        history_layout.addWidget(self.today_label, 1, 0, 1, 2)
+        root.addWidget(history_group)
+
+        tracker_group = QGroupBox("Deathmatches importados")
+        tracker_layout = QGridLayout(tracker_group)
+        self.tracker_total_label = QLabel("DMs importados: 0")
+        self.tracker_kd_label = QLabel("KD médio: -")
+        self.tracker_best_map_label = QLabel("Melhor mapa: -")
+        self.tracker_best_agent_label = QLabel("Melhor agente: -")
+        self.tracker_best_match_label = QLabel("Melhor DM: -")
+        self.tracker_last_match_label = QLabel("Último DM: -")
+
+        tracker_layout.addWidget(self.tracker_total_label, 0, 0)
+        tracker_layout.addWidget(self.tracker_kd_label, 0, 1)
+        tracker_layout.addWidget(self.tracker_best_map_label, 1, 0)
+        tracker_layout.addWidget(self.tracker_best_agent_label, 1, 1)
+        tracker_layout.addWidget(self.tracker_best_match_label, 2, 0)
+        tracker_layout.addWidget(self.tracker_last_match_label, 2, 1)
+        root.addWidget(tracker_group)
+
+        self.tracker_table = QTableWidget(0, 10)
+        self.tracker_table.setHorizontalHeaderLabels([
+            "Data", "Mapa", "Agente", "K", "D", "A", "KD", "Duração", "Arma", "Protocolo"
+        ])
+        self.tracker_table.setMinimumHeight(260)
+        root.addWidget(self.tracker_table, stretch=1)
         return tab
 
     def _build_settings_tab(self) -> QWidget:
@@ -539,6 +663,8 @@ class MainWindow(QWidget):
         self.reload_settings_button.clicked.connect(self.reload_quick_settings)
         self.reset_settings_button.clicked.connect(self.reset_quick_settings_to_defaults)
         self.setting_show_api_key.toggled.connect(self.toggle_api_key_visibility)
+        self.block_mode_combo.currentIndexChanged.connect(self.update_training_method_panel)
+        self.training_method_combo.currentIndexChanged.connect(self.update_training_method_panel)
 
         self.signals.toggle_session_requested.connect(self.toggle_session)
         self.signals.reset_requested.connect(self.reset_counters)
@@ -548,6 +674,20 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # Configurações rápidas
     # ------------------------------------------------------------------
+
+    def update_training_method_panel(self, *_args) -> None:
+        is_dm_training = self.block_mode_combo.currentData() == "dm_training"
+        self.training_method_combo.setEnabled(is_dm_training)
+        self.training_method_group.setVisible(is_dm_training)
+        if not is_dm_training:
+            return
+
+        method_id = self.training_method_combo.currentData()
+        method = next((item for item in TRAINING_METHODS if item["id"] == method_id), TRAINING_METHODS[0])
+        self.training_method_description_label.setText(method["description"])
+        self.training_method_weapons_label.setText(method["weapons"])
+        self.training_method_rules_label.setText(method["rules"])
+        self.training_method_metrics_label.setText(method["metrics"])
 
     @staticmethod
     def make_int_spin(minimum: int, maximum: int) -> QSpinBox:
@@ -1048,6 +1188,16 @@ class MainWindow(QWidget):
         self.avg_rate_label.setText(f"Taxa média geral: {stats.average_protocol_rate:.1f}%")
         self.best_weapon_label.setText(f"Melhor arma: {stats.best_weapon} ({stats.best_weapon_rate:.1f}%)" if stats.best_weapon else "Melhor arma: -")
         self.today_label.setText(f"Hoje: {stats.today.sessions} sessões | {stats.today.average_protocol_rate:.1f}% | +{stats.today.kcreds_earned} KCred")
+        self.kcred_rules_label.setText(
+            f"+{self.app_config.kcred_per_clean_hit} por acerto limpo | "
+            f"-{self.app_config.kcred_penalty_brake_error} freio | "
+            f"-{self.app_config.kcred_penalty_diagonal_error} diagonal | "
+            f"-{self.app_config.kcred_penalty_no_ad_error} sem A/D"
+        )
+        self.xp_rules_label.setText(
+            f"+{self.app_config.xp_per_clean_hit} XP por acerto limpo | "
+            f"{self.app_config.xp_per_level} XP por nível"
+        )
 
         self.tracker_total_label.setText(f"DMs importados: {stats.tracker.total_matches}")
         self.tracker_kd_label.setText(f"KD médio: {stats.tracker.average_kd:.2f}")
