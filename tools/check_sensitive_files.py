@@ -20,7 +20,7 @@ SENSITIVE_TRACKED_SUFFIXES = {
 }
 SUSPICIOUS_PATTERNS = [
     re.compile(r"HDEV-[A-Za-z0-9-]{20,}"),
-    re.compile(r"HENRIK_API_KEY\s*=\s*[^\s#]+"),
+    re.compile(r"HENRIK_API_KEY[^\S\r\n]*=[^\S\r\n]*[^\s#]+"),
     re.compile(r'"api_key"\s*:\s*"[^"]{8,}"'),
 ]
 SKIP_SUFFIXES = {

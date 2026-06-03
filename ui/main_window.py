@@ -4,10 +4,9 @@ import calendar
 from datetime import date
 
 from pynput import keyboard, mouse
-from PySide6.QtCore import QDate, QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QDate, QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QDateEdit,
@@ -43,6 +42,7 @@ from core.tracker_importer import (
     load_tracker_dm_matches,
     load_tracker_ranked_matches,
 )
+from ui.import_worker import TrackerImportWorker
 
 
 class GuiSignals(QObject):
@@ -60,6 +60,9 @@ class MainWindow(QWidget):
         self.signals = GuiSignals()
         self.keyboard_listener = None
         self.mouse_listener = None
+        self.tracker_import_thread: QThread | None = None
+        self.tracker_import_worker: TrackerImportWorker | None = None
+        self.active_tracker_import_kind = ""
         self.setWindowTitle("MVP APP — Valorant Training / KCred")
         self.resize(1180, 820)
         self.setMinimumSize(980, 680)
@@ -846,32 +849,16 @@ class MainWindow(QWidget):
         end_date=None,
         replace_date_range: bool = False,
     ) -> None:
-        self.set_tracker_import_controls_enabled(False)
-        self.set_tracker_progress(0.0, "Tracker: importando")
-
-        def on_progress(progress: dict) -> None:
-            percent = float(progress.get("percent", 0.0))
-            self.set_tracker_progress(percent, "Tracker: importando")
-            QApplication.processEvents()
-
-        try:
-            result = self.controller.import_tracker_deathmatches(
-                import_all=import_all,
-                progress_callback=on_progress,
-                start_date=start_date,
-                end_date=end_date,
-                replace_date_range=replace_date_range,
-            )
-        except Exception as error:
-            QMessageBox.warning(self, "Importação falhou", str(error))
-            self.set_tracker_progress(0.0, "Tracker: falhou")
-        else:
-            self.set_tracker_progress(result.percent, "Tracker: concluído")
-            if result.message:
-                QMessageBox.information(self, "Importação", result.message)
-            self.refresh_all()
-        finally:
-            self.set_tracker_import_controls_enabled(True)
+        self.start_tracker_import_worker(
+            kind="deathmatch",
+            import_callable=self.controller.import_tracker_deathmatches,
+            import_kwargs={
+                "import_all": import_all,
+                "start_date": start_date,
+                "end_date": end_date,
+                "replace_date_range": replace_date_range,
+            },
+        )
 
     def import_tracker_rankeds(self) -> None:
         import_all = self.import_all_ranked_checkbox.isChecked()
@@ -915,32 +902,81 @@ class MainWindow(QWidget):
         end_date=None,
         replace_date_range: bool = False,
     ) -> None:
-        self.set_ranked_import_controls_enabled(False)
-        self.set_tracker_progress(0.0, "Ranked: importando")
+        self.start_tracker_import_worker(
+            kind="ranked",
+            import_callable=self.controller.import_tracker_rankeds,
+            import_kwargs={
+                "import_all": import_all,
+                "start_date": start_date,
+                "end_date": end_date,
+                "replace_date_range": replace_date_range,
+            },
+        )
 
-        def on_progress(progress: dict) -> None:
-            percent = float(progress.get("percent", 0.0))
-            self.set_tracker_progress(percent, "Ranked: importando")
-            QApplication.processEvents()
+    def is_tracker_import_running(self) -> bool:
+        return self.tracker_import_thread is not None and self.tracker_import_thread.isRunning()
 
-        try:
-            result = self.controller.import_tracker_rankeds(
-                import_all=import_all,
-                progress_callback=on_progress,
-                start_date=start_date,
-                end_date=end_date,
-                replace_date_range=replace_date_range,
-            )
-        except Exception as error:
-            QMessageBox.warning(self, "Importação ranked falhou", str(error))
-            self.set_tracker_progress(0.0, "Ranked: falhou")
-        else:
-            self.set_tracker_progress(result.percent, "Ranked: concluído")
-            if result.message:
-                QMessageBox.information(self, "Importação Ranked", result.message)
-            self.refresh_all()
-        finally:
-            self.set_ranked_import_controls_enabled(True)
+    def set_all_tracker_import_controls_enabled(self, enabled: bool) -> None:
+        self.set_tracker_import_controls_enabled(enabled)
+        self.set_ranked_import_controls_enabled(enabled)
+
+    def start_tracker_import_worker(self, kind: str, import_callable, import_kwargs: dict) -> None:
+        if self.is_tracker_import_running():
+            QMessageBox.information(self, "Importação em andamento", "Aguarde a importação atual terminar.")
+            return
+
+        label = "Ranked" if kind == "ranked" else "Tracker"
+        self.active_tracker_import_kind = kind
+        self.set_all_tracker_import_controls_enabled(False)
+        self.set_tracker_progress(0.0, f"{label}: importando")
+
+        thread = QThread(self)
+        worker = TrackerImportWorker(kind=kind, import_callable=import_callable, import_kwargs=import_kwargs)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.status.connect(self.handle_tracker_import_status)
+        worker.progress.connect(self.handle_tracker_import_progress)
+        worker.finished.connect(self.handle_tracker_import_finished)
+        worker.failed.connect(self.handle_tracker_import_failed)
+        worker.finished.connect(lambda *_: thread.quit())
+        worker.failed.connect(lambda *_: thread.quit())
+        worker.finished.connect(lambda *_: worker.deleteLater())
+        worker.failed.connect(lambda *_: worker.deleteLater())
+        thread.finished.connect(self.clear_tracker_import_worker)
+        thread.finished.connect(thread.deleteLater)
+
+        self.tracker_import_thread = thread
+        self.tracker_import_worker = worker
+        thread.start()
+
+    def handle_tracker_import_status(self, kind: str, message: str) -> None:
+        self.set_tracker_progress(self.info_tracker_progress_bar.value() / 10, message)
+
+    def handle_tracker_import_progress(self, kind: str, percent: float, message: str) -> None:
+        self.set_tracker_progress(percent, message)
+
+    def handle_tracker_import_finished(self, kind: str, result) -> None:
+        label = "Ranked" if kind == "ranked" else "Tracker"
+        percent = float(getattr(result, "percent", 100.0) or 0.0)
+        self.set_tracker_progress(percent, f"{label}: concluído")
+        message = str(getattr(result, "message", "") or "")
+        if message:
+            title = "Importação Ranked" if kind == "ranked" else "Importação"
+            QMessageBox.information(self, title, message)
+        self.refresh_all()
+
+    def handle_tracker_import_failed(self, kind: str, message: str) -> None:
+        label = "Ranked" if kind == "ranked" else "Tracker"
+        self.set_tracker_progress(0.0, f"{label}: falhou")
+        title = "Importação ranked falhou" if kind == "ranked" else "Importação falhou"
+        QMessageBox.warning(self, title, message)
+
+    def clear_tracker_import_worker(self) -> None:
+        self.tracker_import_thread = None
+        self.tracker_import_worker = None
+        self.active_tracker_import_kind = ""
+        self.set_all_tracker_import_controls_enabled(True)
 
     # ------------------------------------------------------------------
     # Refresh/render
