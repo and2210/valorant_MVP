@@ -1,0 +1,11 @@
+{
+    "next_weapon": "Classic",
+    "owned_weapons": [
+        "Classic"
+    ],
+    "purchase_history": [],
+    "weapon_usage": {
+        "Classic": 1
+    },
+    "version": 1
+}
