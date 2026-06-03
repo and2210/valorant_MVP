@@ -31,3 +31,4 @@ data/config.json
 *.tmp
 *.bak
 Thumbs.db
+*.spec
