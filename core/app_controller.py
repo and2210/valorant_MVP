@@ -48,7 +48,11 @@ class AppController:
 
     @property
     def has_pending_purchase(self) -> bool:
-        return self.session_manager.last_finished_session is not None or self.state.has_pending_purchase
+        pending = self.session_manager.last_finished_session
+        return (
+            (pending is not None and pending.session_mode == "dm_training")
+            or self.state.has_pending_purchase
+        )
 
     @property
     def current_weapon(self) -> str:
@@ -64,6 +68,8 @@ class AppController:
 
     @property
     def current_session_kcreds(self) -> int:
+        if self.session_manager.current_session_mode != "dm_training":
+            return 0
         return calculate_session_kcreds(self.tracker.stats, self.tracker.config)
 
     @property
@@ -113,14 +119,17 @@ class AppController:
     # Sessão
     # ------------------------------------------------------------------
 
-    def start_session(self) -> dict[str, Any]:
+    def start_session(self, session_mode: str = "dm_training", training_method: str = "") -> dict[str, Any]:
         if self.has_pending_purchase:
             raise RuntimeError("Existe uma compra pendente antes da próxima sessão.")
 
         if self.is_session_active:
             raise RuntimeError("A sessão já está ativa.")
 
-        start_data = self.session_manager.start_session()
+        start_data = self.session_manager.start_session(
+            session_mode=session_mode,
+            training_method=training_method,
+        )
         self.sync_state()
         return start_data
 
@@ -129,7 +138,7 @@ class AppController:
             raise RuntimeError("Não existe sessão ativa para encerrar.")
 
         result = self.session_manager.finish_session()
-        self.state.has_pending_purchase = True
+        self.state.has_pending_purchase = result.session_mode == "dm_training"
         self.sync_state()
         return result
 
@@ -142,7 +151,12 @@ class AppController:
     def reset_counters(self) -> None:
         self.tracker.reset_counters()
         if self.input_timing.enabled:
-            self.input_timing.start()
+            session_ref = self.input_timing.session_ref
+            self.input_timing.start(
+                session_ref=session_ref,
+                session_mode=self.session_manager.current_session_mode,
+                training_method=self.session_manager.current_training_method,
+            )
         else:
             self.input_timing.reset()
         self.sync_state()

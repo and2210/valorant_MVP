@@ -920,7 +920,10 @@ class MainWindow(QWidget):
         if self.controller.has_pending_purchase:
             QMessageBox.information(self, "Compra pendente", "Confirme a arma do próximo DM antes de iniciar outra sessão.")
             return
-        start_data = self.controller.start_session()
+        start_data = self.controller.start_session(
+            session_mode=str(self.block_mode_combo.currentData() or "dm_training"),
+            training_method=str(self.training_method_combo.currentData() or ""),
+        )
         self.current_weapon_label.setText(f"Arma da sessão: {start_data['weapon']}")
         self.refresh_live_stats()
         self.refresh_buttons()
@@ -1538,15 +1541,18 @@ class MainWindow(QWidget):
         self.fire_context_label.setText(
             f"Tiro W/S: {input_stats.shots_while_forward} | "
             f"crouch+tiro: {input_stats.shots_with_crouch} | "
-            f"crouch longo: {input_stats.crouch_fire_long_count}"
+            f"crouch spray prov.: {input_stats.possible_crouch_sprays}"
         )
         self.input_motion_label.setText(
             f"Diagonal: {input_stats.diagonal_entries}x | "
-            f"{input_stats.diagonal_seconds:.2f}s"
+            f"{input_stats.diagonal_seconds:.2f}s | "
+            f"WASD {input_stats.wasd_seconds:.1f}s"
         )
         self.input_actions_label.setText(
-            f"Inputs: teclas {input_stats.key_presses} | "
-            f"mouse {input_stats.mouse_presses} | "
+            f"Raw {input_stats.raw_event_count} | "
+            f"LMB {input_stats.lmb_clicks} | "
+            f"SHIFT {input_stats.shift_seconds:.1f}s | "
+            f"CTRL {input_stats.ctrl_seconds:.1f}s | "
             f"scroll {input_stats.scroll_events} | "
             f"scroll jump {input_stats.scroll_jump_events}"
         )

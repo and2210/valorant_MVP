@@ -44,6 +44,8 @@ class DMResult:
     kcreds_earned: int
     balance_before: int
     balance_after_earning: int
+    session_mode: str = "dm_training"
+    training_method: str = ""
     weapon_bought_next: str = ""
     weapon_cost: int = 0
     balance_final: int = 0
@@ -101,6 +103,8 @@ class DMResult:
             "kcreds_earned": self.kcreds_earned,
             "balance_before": self.balance_before,
             "balance_after_earning": self.balance_after_earning,
+            "session_mode": self.session_mode,
+            "training_method": self.training_method,
             "weapon_bought_next": self.weapon_bought_next,
             "weapon_cost": self.weapon_cost,
             "balance_final": self.balance_final,
@@ -144,6 +148,8 @@ class DMResult:
             kcreds_earned=to_int(data.get("kcreds_earned", data.get("earned"))),
             balance_before=to_int(data.get("balance_before")),
             balance_after_earning=to_int(data.get("balance_after_earning")),
+            session_mode=str(data.get("session_mode") or "dm_training"),
+            training_method=str(data.get("training_method") or ""),
             weapon_bought_next=str(data.get("weapon_bought_next") or ""),
             weapon_cost=to_int(data.get("weapon_cost")),
             balance_final=to_int(data.get("balance_final", data.get("balance_after_earning"))),

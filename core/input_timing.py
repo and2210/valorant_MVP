@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from typing import Any
 
 from core.config import AppConfig, load_config
@@ -14,6 +15,29 @@ class InputInterval:
     started_at: float
     finished_at: float
     duration_seconds: float
+
+
+@dataclass
+class RawInputEvent:
+    event_index: int
+    event_type: str
+    input_id: str
+    action: str
+    session_active: bool
+    session_ref: str
+    session_mode: str
+    training_method: str
+    windows_timestamp: str
+    monotonic_timestamp: float
+    duration_seconds: float | None
+    active_state: dict[str, bool]
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["monotonic_timestamp"] = round(self.monotonic_timestamp, 6)
+        if self.duration_seconds is not None:
+            data["duration_seconds"] = round(self.duration_seconds, 4)
+        return data
 
 
 @dataclass
@@ -42,6 +66,13 @@ class InputTimingStats:
     diagonal_seconds: float = 0.0
     forward_seconds: float = 0.0
     lateral_seconds: float = 0.0
+    wasd_seconds: float = 0.0
+    shift_seconds: float = 0.0
+    ctrl_seconds: float = 0.0
+    raw_event_count: int = 0
+    lmb_clicks: int = 0
+    possible_crouch_sprays: int = 0
+    jump_window_events: int = 0
     action_counts: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -58,6 +89,9 @@ class InputTimingStats:
         data["diagonal_seconds"] = round(self.diagonal_seconds, 4)
         data["forward_seconds"] = round(self.forward_seconds, 4)
         data["lateral_seconds"] = round(self.lateral_seconds, 4)
+        data["wasd_seconds"] = round(self.wasd_seconds, 4)
+        data["shift_seconds"] = round(self.shift_seconds, 4)
+        data["ctrl_seconds"] = round(self.ctrl_seconds, 4)
         return data
 
 
@@ -82,9 +116,13 @@ class InputTimingTracker:
         self.enabled = False
         self.active_inputs: dict[str, tuple[str, float]] = {}
         self.intervals: list[InputInterval] = []
+        self.raw_events: list[RawInputEvent] = []
         self.stats = InputTimingStats()
         self.last_state_update = time.monotonic()
         self.diagonal_active = False
+        self.session_ref = ""
+        self.session_mode = "dm_training"
+        self.training_method = ""
 
     @staticmethod
     def _normalize_action_map(raw_map: dict[str, Any]) -> dict[str, str]:
@@ -157,10 +195,18 @@ class InputTimingTracker:
             return "mouse_x2"
         return InputTimingTracker.normalize_input_id(text)
 
-    def start(self) -> None:
+    def start(
+        self,
+        session_ref: str = "",
+        session_mode: str = "dm_training",
+        training_method: str = "",
+    ) -> None:
         self.reset()
         self.enabled = bool(self.settings.get("enabled", True))
         self.last_state_update = time.monotonic()
+        self.session_ref = str(session_ref or "")
+        self.session_mode = str(session_mode or "dm_training")
+        self.training_method = str(training_method or "")
 
     def stop(self) -> InputTimingStats:
         now = time.monotonic()
@@ -179,6 +225,7 @@ class InputTimingTracker:
     def reset(self) -> None:
         self.active_inputs = {}
         self.intervals = []
+        self.raw_events = []
         self.stats = InputTimingStats()
         self.last_state_update = time.monotonic()
         self.diagonal_active = False
@@ -193,6 +240,9 @@ class InputTimingTracker:
 
     def active_actions(self) -> set[str]:
         return {action for action, _started_at in self.active_inputs.values()}
+
+    def active_input_ids(self) -> set[str]:
+        return set(self.active_inputs)
 
     def has_forward(self) -> bool:
         return bool(self.active_actions().intersection(self.FORWARD_ACTIONS))
@@ -218,6 +268,12 @@ class InputTimingTracker:
             self.stats.lateral_seconds += elapsed
         if has_forward and has_lateral:
             self.stats.diagonal_seconds += elapsed
+        if self.active_input_ids().intersection({"w", "a", "s", "d"}):
+            self.stats.wasd_seconds += elapsed
+        if self.has_action("walk"):
+            self.stats.shift_seconds += elapsed
+        if self.has_action("crouch"):
+            self.stats.ctrl_seconds += elapsed
 
         currently_diagonal = has_forward and has_lateral
         if currently_diagonal and not self.diagonal_active:
@@ -243,6 +299,42 @@ class InputTimingTracker:
         elif action == "scoreboard":
             self.stats.scoreboard_presses += 1
 
+    def _active_state_snapshot(self) -> dict[str, bool]:
+        active = self.active_input_ids()
+        return {
+            "w": "w" in active,
+            "a": "a" in active,
+            "s": "s" in active,
+            "d": "d" in active,
+            "ctrl": "ctrl" in active,
+            "shift": "shift" in active,
+        }
+
+    def _record_raw_event(
+        self,
+        event_type: str,
+        input_id: str,
+        action: str,
+        monotonic_timestamp: float,
+        duration_seconds: float | None = None,
+    ) -> None:
+        event = RawInputEvent(
+            event_index=len(self.raw_events) + 1,
+            event_type=event_type,
+            input_id=input_id,
+            action=action,
+            session_active=self.enabled,
+            session_ref=self.session_ref,
+            session_mode=self.session_mode,
+            training_method=self.training_method,
+            windows_timestamp=datetime.now().isoformat(timespec="milliseconds"),
+            monotonic_timestamp=monotonic_timestamp,
+            duration_seconds=duration_seconds,
+            active_state=self._active_state_snapshot(),
+        )
+        self.raw_events.append(event)
+        self.stats.raw_event_count = len(self.raw_events)
+
     def on_key_press(self, raw_key: str) -> None:
         if not self.enabled:
             return
@@ -258,6 +350,7 @@ class InputTimingTracker:
         now = time.monotonic()
         self._update_continuous_state(now)
         self.active_inputs[input_id] = (action, now)
+        self._record_raw_event("key_down", input_id, action, now)
         self.stats.key_presses += 1
         self._register_action_count(action)
 
@@ -272,6 +365,7 @@ class InputTimingTracker:
         now = time.monotonic()
         self._update_continuous_state(now)
         action, started_at = self.active_inputs.pop(input_id)
+        self._record_raw_event("key_up", input_id, action, now, now - started_at)
         self._complete_interval(input_id, action, started_at, now)
 
     def on_mouse_button(self, button_name: str, pressed: bool) -> None:
@@ -291,10 +385,12 @@ class InputTimingTracker:
                 return
 
             self.active_inputs[input_id] = (action, now)
+            self._record_raw_event("mouse_down", input_id, action, now)
             self.stats.mouse_presses += 1
             self._register_action_count(action)
 
             if action == "fire":
+                self.stats.lmb_clicks += 1
                 if self.has_forward():
                     self.stats.shots_while_forward += 1
                 if self.has_action("crouch"):
@@ -305,6 +401,7 @@ class InputTimingTracker:
             return
 
         stored_action, started_at = self.active_inputs.pop(input_id)
+        self._record_raw_event("mouse_up", input_id, stored_action, now, now - started_at)
         self._complete_interval(input_id, stored_action, started_at, now)
 
     def on_scroll(self, direction: str) -> None:
@@ -318,11 +415,13 @@ class InputTimingTracker:
 
         now = time.monotonic()
         self._update_continuous_state(now)
+        self._record_raw_event("scroll", input_id, action, now)
         self.stats.scroll_events += 1
         self._register_action_count(action)
 
         if action in {"jump", "scroll_jump"}:
             self.stats.scroll_jump_events += 1
+            self.stats.jump_window_events += 1
 
     def _complete_interval(self, input_id: str, action: str, started_at: float, finished_at: float) -> None:
         duration = max(finished_at - started_at, 0.0)
@@ -362,6 +461,8 @@ class InputTimingTracker:
                 self.stats.shots_with_crouch += 1
             if crouch_overlap > crouch_fire_max:
                 self.stats.crouch_fire_long_count += 1
+            if self._has_crouch_spray_pattern(interval, crouch_fire_max):
+                self.stats.possible_crouch_sprays += 1
 
     def _calculate_overlap_with_action(self, started_at: float, finished_at: float, action: str) -> float:
         total = 0.0
@@ -384,3 +485,27 @@ class InputTimingTracker:
                 total += end - start
 
         return total
+
+    def _has_crouch_spray_pattern(self, fire_interval: InputInterval, crouch_window: float) -> bool:
+        crouch_starts: list[float] = []
+
+        for interval in self.intervals:
+            if interval.action != "crouch":
+                continue
+            if interval.finished_at > fire_interval.started_at and interval.started_at < fire_interval.finished_at:
+                crouch_starts.append(interval.started_at)
+
+        for active_action, active_started_at in self.active_inputs.values():
+            if active_action == "crouch" and active_started_at < fire_interval.finished_at:
+                crouch_starts.append(active_started_at)
+
+        if not crouch_starts:
+            return False
+
+        if fire_interval.duration_seconds > crouch_window:
+            return True
+
+        return any(abs(started_at - fire_interval.started_at) <= crouch_window for started_at in crouch_starts)
+
+    def raw_events_to_dicts(self) -> list[dict[str, Any]]:
+        return [event.to_dict() for event in self.raw_events]

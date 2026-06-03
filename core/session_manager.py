@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from pathlib import Path
 
+from core.config import DATA_DIR
 from core.input_timing import InputTimingStats, InputTimingTracker
 from core.inventory import get_next_weapon, register_weapon_purchase, register_weapon_usage
 from core.kcred_engine import apply_session_earning
@@ -22,6 +25,8 @@ class SessionManager:
         self.tracker = tracker
         self.input_timing = input_timing or InputTimingTracker(tracker.config)
         self.current_session_weapon = "Classic"
+        self.current_session_mode = "dm_training"
+        self.current_training_method = ""
         self.session_started_at: datetime | None = None
         self.last_finished_session: DMResult | None = None
 
@@ -29,32 +34,58 @@ class SessionManager:
     def format_datetime(value: datetime) -> str:
         return value.strftime(DATETIME_FORMAT)
 
-    def start_session(self) -> dict:
+    @staticmethod
+    def normalize_session_mode(session_mode: str) -> str:
+        value = str(session_mode or "dm_training").strip().lower()
+        if value in {"ranked", "competitive"}:
+            return "ranked"
+        return "dm_training"
+
+    def start_session(self, session_mode: str = "dm_training", training_method: str = "") -> dict:
         wallet = load_wallet()
-        self.current_session_weapon = get_next_weapon()
+        self.current_session_mode = self.normalize_session_mode(session_mode)
+        self.current_training_method = str(training_method or "")
         self.session_started_at = datetime.now()
-        register_weapon_usage(self.current_session_weapon)
+
+        if self.current_session_mode == "dm_training":
+            self.current_session_weapon = get_next_weapon()
+            register_weapon_usage(self.current_session_weapon)
+        else:
+            self.current_session_weapon = "Ranked"
+
         self.tracker.start()
-        self.input_timing.start()
+        self.input_timing.start(
+            session_ref=self.format_datetime(self.session_started_at),
+            session_mode=self.current_session_mode,
+            training_method=self.current_training_method,
+        )
 
         return {
             "weapon": self.current_session_weapon,
             "balance": wallet.get("balance", 0),
             "started_at": self.format_datetime(self.session_started_at),
+            "session_mode": self.current_session_mode,
+            "training_method": self.current_training_method,
         }
 
     def finish_session(self) -> DMResult:
         wallet = load_wallet()
         stats = self.tracker.stats
-        earned = calculate_session_kcreds(stats, self.tracker.config)
+        is_dm_training = self.current_session_mode == "dm_training"
+        earned = calculate_session_kcreds(stats, self.tracker.config) if is_dm_training else 0
         finished_at = datetime.now()
         started_at = self.session_started_at or finished_at
 
         self.tracker.stop()
         input_stats = self.input_timing.stop()
 
-        wallet, balance_before, balance_after_earning = apply_session_earning(wallet, earned)
-        session_id = wallet["session_count"]
+        if is_dm_training:
+            wallet, balance_before, balance_after_earning = apply_session_earning(wallet, earned)
+            session_id = wallet["session_count"]
+        else:
+            balance_before = int(wallet.get("balance", 0))
+            balance_after_earning = balance_before
+            session_id = 0
 
         result = self.build_result(
             session_id=session_id,
@@ -67,8 +98,14 @@ class SessionManager:
             input_stats=input_stats,
         )
 
-        save_wallet(wallet)
-        self.last_finished_session = result
+        self.save_input_audit(result, input_stats)
+
+        if is_dm_training:
+            save_wallet(wallet)
+            self.last_finished_session = result
+        else:
+            self.last_finished_session = None
+
         self.session_started_at = None
         return result
 
@@ -102,6 +139,8 @@ class SessionManager:
             kcreds_earned=earned,
             balance_before=balance_before,
             balance_after_earning=balance_after_earning,
+            session_mode=self.current_session_mode,
+            training_method=self.current_training_method,
             balance_final=balance_after_earning,
             input_key_presses=int(input_payload.get("key_presses", 0)),
             input_mouse_presses=int(input_payload.get("mouse_presses", 0)),
@@ -120,6 +159,34 @@ class SessionManager:
             input_diagonal_seconds=float(input_payload.get("diagonal_seconds", 0.0)),
             input_payload=input_payload,
         )
+
+    def save_input_audit(self, result: DMResult, input_stats: InputTimingStats) -> Path:
+        audit_dir = DATA_DIR / "input_audit"
+        audit_dir.mkdir(parents=True, exist_ok=True)
+
+        started_safe = result.started_at.replace(":", "").replace(" ", "_").replace("-", "")
+        session_ref = f"session_{result.session_id:04d}" if result.session_id > 0 else f"{result.session_mode}_{started_safe}"
+        path = audit_dir / f"{session_ref}.json"
+        payload = {
+            "session": {
+                "session_id": result.session_id,
+                "session_ref": session_ref,
+                "session_mode": result.session_mode,
+                "training_method": result.training_method,
+                "started_at": result.started_at,
+                "finished_at": result.finished_at,
+                "duration_seconds": result.duration_seconds,
+                "weapon_used": result.weapon_used,
+                "kcreds_earned": result.kcreds_earned,
+            },
+            "summary": input_stats.to_dict(),
+            "raw_events": self.input_timing.raw_events_to_dicts(),
+        }
+
+        with path.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+
+        return path
 
     def finish_purchase_and_save(self, weapon: dict) -> DMResult | None:
         if self.last_finished_session is None:
