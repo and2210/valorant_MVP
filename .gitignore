@@ -2,40 +2,32 @@
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
 .venv/
 venv/
 env/
 build/
 dist/
-*.spec
 
 # Dados locais do Radiante
-mvp-app/data/radiante.db
-mvp-app/data/*.db
-mvp-app/data/*.sqlite
-mvp-app/data/*.sqlite3
-mvp-app/data/tracker_raw/
-mvp-app/data/tracker_dm_cache.json
-mvp-app/data/tracker_ranked_cache.json
-mvp-app/data/tracker_dm_matches.csv
-mvp-app/data/tracker_ranked_matches.csv
-mvp-app/data/sessions.csv
-mvp-app/data/wallet.json
-mvp-app/data/inventory.json
+data/radiante.db
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/tracker_raw/
+data/tracker_dm_cache.json
+data/tracker_ranked_cache.json
+data/tracker_dm_matches.csv
+data/tracker_ranked_matches.csv
+data/sessions.csv
+data/wallet.json
+data/inventory.json
 
 # Config sensível
-mvp-app/data/config.json
-mvp-app/.env
+data/config.json
 .env
 
 # Logs e temporários
 *.log
 *.tmp
 *.bak
-.DS_Store
 Thumbs.db
-
-# IDE
-.vscode/
-.idea/

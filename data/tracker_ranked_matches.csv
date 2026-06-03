@@ -1,3 +1,0 @@
-﻿match_id;date;mode;map_name;agent;result;rank;rr;rr_change;elo;kills;deaths;assists;kd;acs;adr;kast;hs_percent;headshots;bodyshots;legshots;damage_dealt;damage_received;damage_delta;dd_per_round;first_kills;first_deaths;fb_fd_delta;rounds_won;rounds_lost;duration;duration_seconds;ally_team;enemy_team;average_rank;average_elo;raw_queue;raw_mode
-f03ca6aa-43b4-4d75-b1d3-c11f4c4d635e;2026-06-03 01:24:25;Competitive;Ascent;Omen;Loss;Diamond 2;19;-13;1619;9;16;11;0.56;130.14;85.24;0.0;28.0;7;18;0;1790;2927;-1137;-54.14;0;0;0;8;13;32:24;1944;Red;Blue;;0;Competitive;
-b307391f-3754-4d3c-9ce7-8fe12fc0afb9;2026-06-03 00:40:03;Competitive;Lotus;Omen;Win;Diamond 2;32;12;1632;8;10;7;0.8;108.33;76.9;0.0;38.1;8;13;0;1615;2153;-538;-25.62;0;0;0;13;8;33:35;2015;Blue;Red;;0;Competitive;
