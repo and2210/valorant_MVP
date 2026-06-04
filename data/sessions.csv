@@ -1,4 +1,0 @@
-﻿session_id;datetime;started_at;finished_at;duration_seconds;weapon_used;clean_hits;brake_errors;diagonal_errors;no_ad_errors;valid_attempts;ignored_clicks;clicks_while_holding_lateral;protocol_rate;kcreds_earned;balance_before;balance_after_earning;weapon_bought_next;weapon_cost;balance_final
-9;2026-06-03 10:56:19;2026-06-03 10:50:07;2026-06-03 10:56:19;372;Classic;43;84;135;2;264;87;18;16.3;430;1430;1860;Ghost;500;1360
-11;2026-06-03 12:04:13;2026-06-03 12:02:47;2026-06-03 12:04:13;86;Classic;26;4;6;0;36;8;23;72.2;210;1530;1740;Classic;0;1740;57;46;10;0;38;8;0;46;0.0894;0.125;0;0;0;6;2.999
-12;2026-06-03 12:04:41;2026-06-03 12:04:29;2026-06-03 12:04:41;12;Classic;11;0;0;0;11;0;0;100.0;110;1740;1850;Classic;0;1850;4;14;0;0;14;0;0;14;0.0794;0.094;0;0;0;0;0.0

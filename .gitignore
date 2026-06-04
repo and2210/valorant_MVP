@@ -7,26 +7,17 @@ venv/
 env/
 build/
 dist/
+*.db
+*.sqlite
+*.sqlite3
 
 # Dados locais do Radiante
-data/radiante.db
-data/*.db
-data/*.sqlite
-data/*.sqlite3
-data/tracker_raw/
-data/tracker_dm_cache.json
-data/tracker_ranked_cache.json
-data/tracker_dm_matches.csv
-data/tracker_ranked_matches.csv
-data/sessions.csv
-data/wallet.json
-data/inventory.json
+data/
 
-# Config sensível
-data/config.json
+# Config sensivel
 .env
 
-# Logs e temporários
+# Logs e temporarios
 *.log
 *.tmp
 *.bak
