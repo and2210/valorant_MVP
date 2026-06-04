@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -36,6 +37,7 @@ from core.app_controller import AppController
 from core.input_timing import InputTimingTracker
 from core.config import DATA_DIR, AppConfig, load_config, save_config
 from core.dashboard import DashboardStats
+from core.protocol_tracker import DIAGONAL_RULE_LABELS
 from core.tracker_importer import (
     build_ranked_radiante_stats,
     build_training_calendar,
@@ -218,6 +220,16 @@ class MainWindow(QWidget):
         input_layout.addWidget(self.input_motion_label, 3, 0)
         input_layout.addWidget(self.input_actions_label, 3, 1)
         root.addWidget(input_group)
+
+        debug_group = QGroupBox("Protocol debug")
+        debug_layout = QVBoxLayout(debug_group)
+        self.protocol_rule_status_label = QLabel("Protocol rules: -")
+        self.protocol_debug_text = QPlainTextEdit()
+        self.protocol_debug_text.setReadOnly(True)
+        self.protocol_debug_text.setMinimumHeight(140)
+        debug_layout.addWidget(self.protocol_rule_status_label)
+        debug_layout.addWidget(self.protocol_debug_text)
+        root.addWidget(debug_group)
 
         purchase_group = QGroupBox("Compra da próxima arma")
         purchase_layout = QHBoxLayout(purchase_group)
@@ -447,11 +459,17 @@ class MainWindow(QWidget):
         self.setting_stationary_clean = QCheckBox("Clique parado conta como acerto limpo")
         self.setting_stationary_release = self.make_seconds_spin(0.00, 2.00)
         self.setting_require_release = QCheckBox("Exigir soltar A/D no momento do clique")
+        self.setting_diagonal_rule = QComboBox()
+        self.setting_diagonal_rule.addItem("Strict Footwork", "strict_footwork")
+        self.setting_diagonal_rule.addItem("Shot-Linked", "shot_linked")
+        self.setting_diagonal_rule.addItem("Informational", "informational")
+        self.setting_diagonal_rule.addItem("Disabled", "disabled")
         protocol_form.addRow("Tempo máximo do episódio:", self.setting_episode_timeout)
         protocol_form.addRow("Cooldown pós-clique:", self.setting_click_cooldown)
         protocol_form.addRow("Disparo parado:", self.setting_stationary_clean)
         protocol_form.addRow("Tempo mínimo parado:", self.setting_stationary_release)
         protocol_form.addRow("Regra extra:", self.setting_require_release)
+        protocol_form.addRow("Diagonal footwork (DM):", self.setting_diagonal_rule)
         root.addWidget(protocol_group)
 
         input_group = QGroupBox("Input timing")
@@ -578,6 +596,12 @@ class MainWindow(QWidget):
         widget.setSuffix(" h")
         return widget
 
+    @staticmethod
+    def set_combo_data(widget: QComboBox, value: str) -> None:
+        index = widget.findData(value)
+        if index >= 0:
+            widget.setCurrentIndex(index)
+
     def toggle_api_key_visibility(self, checked: bool) -> None:
         self.setting_api_key.setEchoMode(
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
@@ -606,6 +630,11 @@ class MainWindow(QWidget):
         self.setting_stationary_clean.setChecked(bool(config.stationary_click_counts_clean))
         self.setting_stationary_release.setValue(float(config.stationary_min_release_seconds))
         self.setting_require_release.setChecked(bool(config.require_release_at_click))
+        protocol_settings = dict(config.protocol or {})
+        self.set_combo_data(
+            self.setting_diagonal_rule,
+            str(protocol_settings.get("diagonal_footwork_rule_deathmatch", "strict_footwork")),
+        )
 
         input_settings = dict(config.input_timing or {})
         self.setting_input_enabled.setChecked(bool(input_settings.get("enabled", True)))
@@ -657,6 +686,12 @@ class MainWindow(QWidget):
             "strong_day_hours": self.setting_strong_day.value(),
         })
 
+        protocol_settings = dict(current.protocol or {})
+        protocol_settings.update({
+            "diagonal_footwork_rule_deathmatch": str(self.setting_diagonal_rule.currentData() or "strict_footwork"),
+            "diagonal_footwork_rule_ranked": str(protocol_settings.get("diagonal_footwork_rule_ranked") or "informational"),
+        })
+
         input_settings = dict(current.input_timing or {})
         input_settings.update({
             "enabled": self.setting_input_enabled.isChecked(),
@@ -682,6 +717,7 @@ class MainWindow(QWidget):
             "weapons": current.weapons,
             "tracker": tracker_settings,
             "training_calendar": calendar_settings,
+            "protocol": protocol_settings,
             "input_timing": input_settings,
         })
 
@@ -1371,6 +1407,41 @@ class MainWindow(QWidget):
             return f"{hours:02d}:{minutes:02d}:{remaining_seconds:02d}"
         return f"{minutes:02d}:{remaining_seconds:02d}"
 
+    def diagonal_mode_label(self, mode: str) -> str:
+        return DIAGONAL_RULE_LABELS.get(mode, mode or "-")
+
+    @staticmethod
+    def format_protocol_event_line(event: dict) -> str:
+        event_type = str(event.get("event_type") or "-")
+        rule_name = str(event.get("rule_name") or "-")
+        rule_mode = str(event.get("rule_mode") or "-")
+        severity = str(event.get("severity") or "-")
+        penalized = "yes" if bool(event.get("penalized")) else "no"
+        reason = str(event.get("reason") or "-")
+        coins_delta = event.get("coins_delta")
+        coins_text = ""
+        if coins_delta not in (None, ""):
+            coins_text = f" | coins {int(coins_delta):+d}"
+        return (
+            f"{event_type} | {rule_name} | {rule_mode} | {severity} | "
+            f"penalized={penalized}{coins_text} | {reason}"
+        )
+
+    def refresh_protocol_debug_view(self) -> None:
+        mode = self.controller.current_diagonal_rule_mode
+        session_mode = self.controller.current_session_mode
+        self.protocol_rule_status_label.setText(
+            f"Protocol rules: {session_mode} | diagonal mode {self.diagonal_mode_label(mode)} ({mode})"
+        )
+
+        events = self.controller.live_protocol_events
+        if not events:
+            self.protocol_debug_text.setPlainText("No protocol events yet.")
+            return
+
+        lines = [self.format_protocol_event_line(event) for event in events]
+        self.protocol_debug_text.setPlainText("\n".join(lines))
+
     def refresh_live_stats(self) -> None:
         stats = self.controller.live_stats
         self.clean_hits_label.setText(f"Acertos limpos: {stats.clean_hits}")
@@ -1410,6 +1481,7 @@ class MainWindow(QWidget):
             f"scroll {input_stats.scroll_events} | "
             f"scroll jump {input_stats.scroll_jump_events}"
         )
+        self.refresh_protocol_debug_view()
 
     # ------------------------------------------------------------------
     # Shutdown

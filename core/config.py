@@ -91,6 +91,12 @@ class AppConfig:
         "strong_day_hours": 2.0,
         "export_filename": "training_calendar_month.csv",
     })
+    protocol: dict[str, Any] = field(default_factory=lambda: {
+        "diagonal_footwork_rule_deathmatch": "strict_footwork",
+        "diagonal_footwork_rule_ranked": "informational",
+        "shot_linked_window_seconds": 0.50,
+        "debug_event_limit": 12,
+    })
     input_timing: dict[str, Any] = field(default_factory=lambda: {
         "enabled": True,
         "tap_max_seconds": 0.12,
@@ -183,6 +189,30 @@ class AppConfig:
         normalized_training_calendar["strong_day_hours"] = max(_to_float(normalized_training_calendar.get("strong_day_hours"), 2.0), 0.1)
         normalized_training_calendar["export_filename"] = str(normalized_training_calendar.get("export_filename") or "training_calendar_month.csv").strip()
 
+        protocol = data.get("protocol", defaults.protocol)
+        if not isinstance(protocol, dict):
+            protocol = defaults.protocol
+
+        normalized_protocol = dict(defaults.protocol)
+        normalized_protocol.update(protocol)
+        valid_diagonal_modes = {"strict_footwork", "shot_linked", "informational", "disabled"}
+        deathmatch_mode = str(normalized_protocol.get("diagonal_footwork_rule_deathmatch") or "strict_footwork").strip()
+        ranked_mode = str(normalized_protocol.get("diagonal_footwork_rule_ranked") or "informational").strip()
+        normalized_protocol["diagonal_footwork_rule_deathmatch"] = (
+            deathmatch_mode if deathmatch_mode in valid_diagonal_modes else "strict_footwork"
+        )
+        normalized_protocol["diagonal_footwork_rule_ranked"] = (
+            ranked_mode if ranked_mode in valid_diagonal_modes else "informational"
+        )
+        normalized_protocol["shot_linked_window_seconds"] = max(
+            _to_float(normalized_protocol.get("shot_linked_window_seconds"), 0.50),
+            0.05,
+        )
+        normalized_protocol["debug_event_limit"] = max(
+            _to_int(normalized_protocol.get("debug_event_limit"), 12),
+            1,
+        )
+
         input_timing = data.get("input_timing", defaults.input_timing)
         if not isinstance(input_timing, dict):
             input_timing = defaults.input_timing
@@ -227,6 +257,7 @@ class AppConfig:
             weapons=normalized_weapons,
             tracker=normalized_tracker,
             training_calendar=normalized_training_calendar,
+            protocol=normalized_protocol,
             input_timing=normalized_input_timing,
         )
 

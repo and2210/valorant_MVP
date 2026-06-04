@@ -70,6 +70,14 @@ class AppController:
         return self.input_timing.snapshot()
 
     @property
+    def live_protocol_events(self) -> list[dict[str, Any]]:
+        return list(self.tracker.recent_protocol_events())
+
+    @property
+    def current_diagonal_rule_mode(self) -> str:
+        return self.tracker.current_diagonal_rule_mode
+
+    @property
     def current_session_kcreds(self) -> int:
         if self.current_session_mode == "ranked":
             return 0
@@ -93,10 +101,12 @@ class AppController:
 
     def handle_key_press(self, key_name: str) -> None:
         self.input_timing.on_key_press(key_name)
+        self.tracker.on_input_state_changed(self.input_timing.build_fire_context())
         self.sync_state()
 
     def handle_key_release(self, key_name: str) -> None:
         self.input_timing.on_key_release(key_name)
+        self.tracker.on_input_state_changed(self.input_timing.build_fire_context())
         self.sync_state()
 
     def handle_mouse_button(self, button_name: str, pressed: bool) -> None:
@@ -155,7 +165,7 @@ class AppController:
         self.tracker.reset_counters()
         self.input_timing.reset()
         if was_active:
-            self.tracker.start()
+            self.tracker.start(self.current_session_mode)
             self.input_timing.start()
         self.sync_state()
 
