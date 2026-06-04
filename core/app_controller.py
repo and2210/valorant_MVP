@@ -38,6 +38,9 @@ class AppController:
         self.input_timing = InputTimingTracker(self.tracker.config)
         self.session_manager = SessionManager(self.tracker, self.input_timing)
         self.state = AppState(current_weapon=self.session_manager.current_session_weapon)
+        self._runtime_revision = 0
+        self._wallet_cache: dict[str, Any] | None = None
+        self._available_weapons_cache: list[dict[str, Any]] | None = None
 
     # ------------------------------------------------------------------
     # Estado
@@ -78,6 +81,10 @@ class AppController:
         return self.tracker.current_diagonal_rule_mode
 
     @property
+    def runtime_revision(self) -> int:
+        return self._runtime_revision
+
+    @property
     def current_session_kcreds(self) -> int:
         if self.current_session_mode == "ranked":
             return 0
@@ -93,7 +100,12 @@ class AppController:
         self.state.current_weapon = self.current_weapon
         self.state.session_mode = self.current_session_mode
         self.state.last_finished_session = self.last_finished_session
+        self._runtime_revision += 1
         return self.state
+
+    def invalidate_cached_resources(self) -> None:
+        self._wallet_cache = None
+        self._available_weapons_cache = None
 
     # ------------------------------------------------------------------
     # Eventos de input
@@ -149,6 +161,7 @@ class AppController:
             raise RuntimeError("Não existe sessão ativa para encerrar.")
 
         result = self.session_manager.finish_session()
+        self.invalidate_cached_resources()
         self.state.has_pending_purchase = result.session_mode == "deathmatch"
         self.sync_state()
         return result
@@ -195,7 +208,9 @@ class AppController:
     # ------------------------------------------------------------------
 
     def get_available_weapons(self) -> list[dict[str, Any]]:
-        return list_weapons_with_status(load_wallet())
+        if self._available_weapons_cache is None:
+            self._available_weapons_cache = list_weapons_with_status(self.get_wallet())
+        return [dict(item) for item in self._available_weapons_cache]
 
     def confirm_purchase_by_name(self, weapon_name: str) -> DMResult:
         weapon = get_weapon_by_name(weapon_name)
@@ -208,6 +223,7 @@ class AppController:
         if saved_session is None:
             raise RuntimeError("Não existe sessão finalizada aguardando compra.")
 
+        self.invalidate_cached_resources()
         self.state.has_pending_purchase = False
         self.sync_state()
         return saved_session
@@ -220,7 +236,9 @@ class AppController:
     # ------------------------------------------------------------------
 
     def get_wallet(self) -> dict[str, Any]:
-        return load_wallet()
+        if self._wallet_cache is None:
+            self._wallet_cache = load_wallet()
+        return dict(self._wallet_cache)
 
     def get_dashboard(self) -> DashboardStats:
         return build_dashboard_stats()

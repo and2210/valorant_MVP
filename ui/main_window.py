@@ -55,6 +55,8 @@ class GuiSignals(QObject):
 
 
 class MainWindow(QWidget):
+    LIVE_UPDATE_INTERVAL_MS = 400
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -62,6 +64,7 @@ class MainWindow(QWidget):
         self.signals = GuiSignals()
         self.keyboard_listener = None
         self.mouse_listener = None
+        self.last_runtime_revision = -1
         self.setWindowTitle("MVP APP — Valorant Training / KCred")
         self.resize(1180, 820)
         self.setMinimumSize(980, 680)
@@ -75,7 +78,7 @@ class MainWindow(QWidget):
 
         self.live_timer = QTimer(self)
         self.live_timer.timeout.connect(self.refresh_runtime_state)
-        self.live_timer.start(500)
+        self.live_timer.start(self.LIVE_UPDATE_INTERVAL_MS)
 
         self.refresh_all()
 
@@ -663,7 +666,7 @@ class MainWindow(QWidget):
         self.setting_ranked_detail_enrichment.setChecked(bool(tracker_settings.get("ranked_detail_enrichment", True)))
 
     def build_config_from_form(self) -> AppConfig:
-        current = load_config()
+        current = self.app_config
 
         tracker_settings = dict(current.tracker or {})
         tracker_settings.update({
@@ -769,17 +772,39 @@ class MainWindow(QWidget):
             return str(key)
 
     def _start_input_listeners(self) -> None:
+        self._ensure_keyboard_listener()
+        self._update_capture_listeners()
+
+    def _ensure_keyboard_listener(self) -> None:
+        if self.keyboard_listener is not None and self.keyboard_listener.running:
+            return
+
         self.keyboard_listener = keyboard.Listener(
             on_press=self._on_key_press,
             on_release=self._on_key_release,
         )
+        self.keyboard_listener.start()
+
+    def _ensure_mouse_listener(self) -> None:
+        if self.mouse_listener is not None and self.mouse_listener.running:
+            return
+
         self.mouse_listener = mouse.Listener(
             on_click=self._on_click,
             on_scroll=self._on_scroll,
         )
-
-        self.keyboard_listener.start()
         self.mouse_listener.start()
+
+    def _stop_mouse_listener(self) -> None:
+        if self.mouse_listener is not None and self.mouse_listener.running:
+            self.mouse_listener.stop()
+        self.mouse_listener = None
+
+    def _update_capture_listeners(self) -> None:
+        if self.controller.is_session_active:
+            self._ensure_mouse_listener()
+        else:
+            self._stop_mouse_listener()
 
     def _on_key_press(self, key):
         if key == keyboard.Key.f10:
@@ -794,16 +819,24 @@ class MainWindow(QWidget):
         if key == keyboard.Key.f12:
             self.signals.shutdown_requested.emit()
             return False
+        if not self.controller.is_session_active:
+            return
         self.controller.handle_key_press(self.get_key_name(key))
 
     def _on_key_release(self, key):
+        if not self.controller.is_session_active:
+            return
         self.controller.handle_key_release(self.get_key_name(key))
 
     def _on_click(self, x, y, button, pressed):
+        if not self.controller.is_session_active:
+            return
         button_name = InputTimingTracker.mouse_button_to_input_id(button)
         self.controller.handle_mouse_button(button_name, bool(pressed))
 
     def _on_scroll(self, x, y, dx, dy):
+        if not self.controller.is_session_active:
+            return
         if dy > 0:
             self.controller.handle_mouse_scroll("scroll_up")
         elif dy < 0:
@@ -824,6 +857,7 @@ class MainWindow(QWidget):
             QMessageBox.information(self, "Compra pendente", "Confirme a arma do próximo DM antes de iniciar outra sessão.")
             return
         start_data = self.controller.start_session(self.selected_session_mode())
+        self._update_capture_listeners()
         self.current_weapon_label.setText(f"Arma da sessão: {start_data['weapon']}")
         self.refresh_live_stats()
         self.refresh_buttons()
@@ -832,12 +866,14 @@ class MainWindow(QWidget):
         if not self.controller.is_session_active:
             return
         result = self.controller.finish_session()
+        self._update_capture_listeners()
         if result.session_mode == "deathmatch":
             self.populate_weapon_combo()
         self.refresh_all()
 
     def reset_counters(self) -> None:
         self.controller.reset_counters()
+        self._update_capture_listeners()
         self.refresh_live_stats()
 
     def confirm_purchase(self) -> None:
@@ -863,6 +899,7 @@ class MainWindow(QWidget):
             self.set_session_mode_combo(self.controller.current_session_mode)
             return
 
+        self._update_capture_listeners()
         self.refresh_live_stats()
         self.refresh_buttons()
 
@@ -1041,12 +1078,18 @@ class MainWindow(QWidget):
                     model_item.setEnabled(False)
 
     def refresh_runtime_state(self) -> None:
+        current_revision = self.controller.runtime_revision
+        if (not self.controller.is_session_active) and current_revision == self.last_runtime_revision:
+            return
+
         self.refresh_live_stats()
         self.refresh_buttons()
+        self.last_runtime_revision = current_revision
 
     def refresh_buttons(self) -> None:
         is_active = self.controller.is_session_active
         has_pending_purchase = self.controller.has_pending_purchase
+        self._update_capture_listeners()
         self.status_label.setText("Status: LIGADO" if is_active else "Status: DESLIGADO")
         self.start_button.setEnabled((not is_active) and (not has_pending_purchase))
         self.finish_button.setEnabled(is_active)
@@ -1075,6 +1118,7 @@ class MainWindow(QWidget):
         self.refresh_tracker_table()
         self.refresh_ranked_tab()
         self.refresh_training_calendar_table()
+        self.last_runtime_revision = self.controller.runtime_revision
 
     def refresh_dashboard(self) -> None:
         stats = self.controller.get_dashboard()
@@ -1490,8 +1534,7 @@ class MainWindow(QWidget):
     def closeEvent(self, event) -> None:
         if self.controller.is_session_active:
             self.controller.stop_without_saving()
-        if self.mouse_listener is not None and self.mouse_listener.running:
-            self.mouse_listener.stop()
+        self._stop_mouse_listener()
         if self.keyboard_listener is not None and self.keyboard_listener.running:
             self.keyboard_listener.stop()
         event.accept()
