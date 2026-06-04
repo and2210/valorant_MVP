@@ -19,6 +19,7 @@ class AppState:
     is_session_active: bool = False
     has_pending_purchase: bool = False
     current_weapon: str = "Classic"
+    session_mode: str = "deathmatch"
     last_finished_session: DMResult | None = None
 
 
@@ -48,11 +49,17 @@ class AppController:
 
     @property
     def has_pending_purchase(self) -> bool:
-        return self.session_manager.last_finished_session is not None or self.state.has_pending_purchase
+        session = self.session_manager.last_finished_session
+        has_dm_purchase = session is not None and session.session_mode == "deathmatch"
+        return has_dm_purchase or self.state.has_pending_purchase
 
     @property
     def current_weapon(self) -> str:
         return self.session_manager.current_session_weapon
+
+    @property
+    def current_session_mode(self) -> str:
+        return self.session_manager.current_session_mode
 
     @property
     def live_stats(self) -> ProtocolStats:
@@ -64,6 +71,8 @@ class AppController:
 
     @property
     def current_session_kcreds(self) -> int:
+        if self.current_session_mode == "ranked":
+            return 0
         return calculate_session_kcreds(self.tracker.stats, self.tracker.config)
 
     @property
@@ -74,6 +83,7 @@ class AppController:
         self.state.is_session_active = self.is_session_active
         self.state.has_pending_purchase = self.has_pending_purchase
         self.state.current_weapon = self.current_weapon
+        self.state.session_mode = self.current_session_mode
         self.state.last_finished_session = self.last_finished_session
         return self.state
 
@@ -111,7 +121,7 @@ class AppController:
     # Sessão
     # ------------------------------------------------------------------
 
-    def start_session(self) -> dict[str, Any]:
+    def start_session(self, session_mode: str = "deathmatch") -> dict[str, Any]:
         if self.has_pending_purchase:
             raise RuntimeError("Existe uma compra pendente antes da próxima sessão.")
 
@@ -120,7 +130,7 @@ class AppController:
 
         self.tracker.stop()
         self.input_timing.reset()
-        start_data = self.session_manager.start_session()
+        start_data = self.session_manager.start_session(session_mode=session_mode)
         self.sync_state()
         return start_data
 
@@ -129,7 +139,7 @@ class AppController:
             raise RuntimeError("Não existe sessão ativa para encerrar.")
 
         result = self.session_manager.finish_session()
-        self.state.has_pending_purchase = True
+        self.state.has_pending_purchase = result.session_mode == "deathmatch"
         self.sync_state()
         return result
 
@@ -156,6 +166,18 @@ class AppController:
             self.input_timing.stop()
         self.input_timing.reset()
 
+        self.sync_state()
+
+    def set_session_mode(self, session_mode: str) -> None:
+        if self.is_session_active:
+            raise RuntimeError("Não é possível trocar o modo com sessão ativa.")
+        if self.has_pending_purchase:
+            raise RuntimeError("Conclua a compra pendente antes de trocar o modo.")
+
+        self.tracker.stop()
+        self.tracker.reset_counters()
+        self.input_timing.reset()
+        self.session_manager.set_session_mode(session_mode)
         self.sync_state()
 
     # ------------------------------------------------------------------

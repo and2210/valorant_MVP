@@ -44,6 +44,7 @@ class DMResult:
     kcreds_earned: int
     balance_before: int
     balance_after_earning: int
+    session_mode: str = "deathmatch"
     weapon_bought_next: str = ""
     weapon_cost: int = 0
     balance_final: int = 0
@@ -144,6 +145,7 @@ class DMResult:
             kcreds_earned=to_int(data.get("kcreds_earned", data.get("earned"))),
             balance_before=to_int(data.get("balance_before")),
             balance_after_earning=to_int(data.get("balance_after_earning")),
+            session_mode=str(data.get("session_mode") or "deathmatch"),
             weapon_bought_next=str(data.get("weapon_bought_next") or ""),
             weapon_cost=to_int(data.get("weapon_cost")),
             balance_final=to_int(data.get("balance_final", data.get("balance_after_earning"))),

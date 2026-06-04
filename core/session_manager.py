@@ -22,6 +22,7 @@ class SessionManager:
         self.tracker = tracker
         self.input_timing = input_timing or InputTimingTracker(tracker.config)
         self.current_session_weapon = "Classic"
+        self.current_session_mode = "deathmatch"
         self.session_started_at: datetime | None = None
         self.last_finished_session: DMResult | None = None
 
@@ -29,11 +30,18 @@ class SessionManager:
     def format_datetime(value: datetime) -> str:
         return value.strftime(DATETIME_FORMAT)
 
-    def start_session(self) -> dict:
+    def set_session_mode(self, session_mode: str) -> None:
+        normalized = str(session_mode or "deathmatch").strip().lower()
+        self.current_session_mode = normalized if normalized in {"deathmatch", "ranked"} else "deathmatch"
+
+    def start_session(self, session_mode: str = "deathmatch") -> dict:
         wallet = load_wallet()
+        self.set_session_mode(session_mode)
+        self.last_finished_session = None
         self.current_session_weapon = get_next_weapon()
         self.session_started_at = datetime.now()
-        register_weapon_usage(self.current_session_weapon)
+        if self.current_session_mode == "deathmatch":
+            register_weapon_usage(self.current_session_weapon)
         self.tracker.start()
         self.input_timing.start()
 
@@ -41,20 +49,27 @@ class SessionManager:
             "weapon": self.current_session_weapon,
             "balance": wallet.get("balance", 0),
             "started_at": self.format_datetime(self.session_started_at),
+            "session_mode": self.current_session_mode,
         }
 
     def finish_session(self) -> DMResult:
         wallet = load_wallet()
         stats = self.tracker.stats
-        earned = calculate_session_kcreds(stats, self.tracker.config)
         finished_at = datetime.now()
         started_at = self.session_started_at or finished_at
 
         self.tracker.stop()
         input_stats = self.input_timing.stop()
+        balance_before = int(wallet.get("balance", 0))
 
-        wallet, balance_before, balance_after_earning = apply_session_earning(wallet, earned)
-        session_id = wallet["session_count"]
+        if self.current_session_mode == "ranked":
+            earned = 0
+            balance_after_earning = balance_before
+            session_id = int(wallet.get("session_count", 0)) + 1
+        else:
+            earned = calculate_session_kcreds(stats, self.tracker.config)
+            wallet, balance_before, balance_after_earning = apply_session_earning(wallet, earned)
+            session_id = wallet["session_count"]
 
         result = self.build_result(
             session_id=session_id,
@@ -67,9 +82,10 @@ class SessionManager:
             input_stats=input_stats,
         )
 
-        save_wallet(wallet)
         self.last_finished_session = result
         self.session_started_at = None
+        if self.current_session_mode == "deathmatch":
+            save_wallet(wallet)
         return result
 
     def build_result(
@@ -102,6 +118,7 @@ class SessionManager:
             kcreds_earned=earned,
             balance_before=balance_before,
             balance_after_earning=balance_after_earning,
+            session_mode=self.current_session_mode,
             balance_final=balance_after_earning,
             input_key_presses=int(input_payload.get("key_presses", 0)),
             input_mouse_presses=int(input_payload.get("mouse_presses", 0)),
@@ -123,6 +140,8 @@ class SessionManager:
 
     def finish_purchase_and_save(self, weapon: dict) -> DMResult | None:
         if self.last_finished_session is None:
+            return None
+        if self.last_finished_session.session_mode != "deathmatch":
             return None
 
         wallet = load_wallet()

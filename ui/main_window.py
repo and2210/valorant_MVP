@@ -92,15 +92,21 @@ class MainWindow(QWidget):
         root.addWidget(self.status_label)
 
         button_row = QHBoxLayout()
+        self.session_mode_combo = QComboBox()
+        self.session_mode_combo.addItem("Deathmatch (KCred)", "deathmatch")
+        self.session_mode_combo.addItem("Ranked (audit only)", "ranked")
         self.start_button = QPushButton("Iniciar DM (F10)")
         self.finish_button = QPushButton("Encerrar DM (F10)")
         self.reset_button = QPushButton("Resetar contadores (F9)")
         self.refresh_button = QPushButton("Atualizar (F6)")
         self.finish_button.setEnabled(False)
+        button_row.addWidget(QLabel("Modo:"))
+        button_row.addWidget(self.session_mode_combo)
         button_row.addWidget(self.start_button)
         button_row.addWidget(self.finish_button)
         button_row.addWidget(self.reset_button)
         button_row.addWidget(self.refresh_button)
+        button_row.addStretch(1)
         root.addLayout(button_row)
 
         self.tabs = QTabWidget()
@@ -180,7 +186,7 @@ class MainWindow(QWidget):
         self.clean_hits_label = QLabel("Acertos limpos: 0")
         self.brake_errors_label = QLabel("Erros de freio: 0")
         self.diagonal_errors_label = QLabel("Erros de diagonal: 0")
-        self.no_ad_errors_label = QLabel("Erros sem A/D: 0")
+        self.no_ad_errors_label = QLabel("Sem A/D (legado): desativado")
         self.valid_attempts_label = QLabel("Tentativas válidas: 0")
         self.ignored_clicks_label = QLabel("Cliques ignorados: 0")
         self.current_rate_label = QLabel("Taxa atual: 0.0%")
@@ -522,6 +528,7 @@ class MainWindow(QWidget):
         self.reset_button.clicked.connect(self.reset_counters)
         self.refresh_button.clicked.connect(self.refresh_all)
         self.confirm_purchase_button.clicked.connect(self.confirm_purchase)
+        self.session_mode_combo.currentIndexChanged.connect(self.change_session_mode)
         self.import_tracker_button.clicked.connect(self.import_tracker_deathmatches)
         self.import_day_button.clicked.connect(self.import_tracker_selected_day)
         self.import_range_button.clicked.connect(self.import_tracker_selected_range)
@@ -780,7 +787,7 @@ class MainWindow(QWidget):
         if self.controller.has_pending_purchase:
             QMessageBox.information(self, "Compra pendente", "Confirme a arma do próximo DM antes de iniciar outra sessão.")
             return
-        start_data = self.controller.start_session()
+        start_data = self.controller.start_session(self.selected_session_mode())
         self.current_weapon_label.setText(f"Arma da sessão: {start_data['weapon']}")
         self.refresh_live_stats()
         self.refresh_buttons()
@@ -788,8 +795,9 @@ class MainWindow(QWidget):
     def finish_session(self) -> None:
         if not self.controller.is_session_active:
             return
-        self.controller.finish_session()
-        self.populate_weapon_combo()
+        result = self.controller.finish_session()
+        if result.session_mode == "deathmatch":
+            self.populate_weapon_combo()
         self.refresh_all()
 
     def reset_counters(self) -> None:
@@ -806,6 +814,30 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "Compra não realizada", str(error))
             return
         self.refresh_all()
+
+    def selected_session_mode(self) -> str:
+        return str(self.session_mode_combo.currentData() or "deathmatch")
+
+    def change_session_mode(self) -> None:
+        session_mode = self.selected_session_mode()
+        try:
+            self.controller.set_session_mode(session_mode)
+        except RuntimeError as error:
+            QMessageBox.warning(self, "Modo bloqueado", str(error))
+            self.set_session_mode_combo(self.controller.current_session_mode)
+            return
+
+        self.refresh_live_stats()
+        self.refresh_buttons()
+
+    def set_session_mode_combo(self, session_mode: str) -> None:
+        index = self.session_mode_combo.findData(session_mode)
+        if index < 0 or index == self.session_mode_combo.currentIndex():
+            return
+
+        self.session_mode_combo.blockSignals(True)
+        self.session_mode_combo.setCurrentIndex(index)
+        self.session_mode_combo.blockSignals(False)
 
     def import_tracker_deathmatches(self) -> None:
         import_all = self.import_all_tracker_checkbox.isChecked()
@@ -983,14 +1015,22 @@ class MainWindow(QWidget):
         self.start_button.setEnabled((not is_active) and (not has_pending_purchase))
         self.finish_button.setEnabled(is_active)
         self.reset_button.setEnabled(is_active)
+        self.session_mode_combo.setEnabled((not is_active) and (not has_pending_purchase))
         self.weapon_combo.setEnabled(has_pending_purchase)
         self.confirm_purchase_button.setEnabled(has_pending_purchase)
+        self.set_session_mode_combo(self.controller.current_session_mode)
         if is_active:
-            self.purchase_status_label.setText("Sessão em andamento.")
+            if self.controller.current_session_mode == "ranked":
+                self.purchase_status_label.setText("Sessão Ranked em andamento. Auditoria ativa, Coins desativadas.")
+            else:
+                self.purchase_status_label.setText("Sessão em andamento.")
         elif has_pending_purchase:
             self.purchase_status_label.setText("Escolha a arma do próximo DM.")
         else:
-            self.purchase_status_label.setText("Pronto para iniciar o próximo DM.")
+            if self.controller.current_session_mode == "ranked":
+                self.purchase_status_label.setText("Pronto para iniciar Ranked com auditoria local.")
+            else:
+                self.purchase_status_label.setText("Pronto para iniciar o próximo DM.")
 
     def refresh_all(self) -> None:
         self.refresh_dashboard()
@@ -1336,11 +1376,14 @@ class MainWindow(QWidget):
         self.clean_hits_label.setText(f"Acertos limpos: {stats.clean_hits}")
         self.brake_errors_label.setText(f"Erros de freio: {stats.brake_errors}")
         self.diagonal_errors_label.setText(f"Erros de diagonal: {stats.diagonal_errors}")
-        self.no_ad_errors_label.setText(f"Erros sem A/D: {stats.no_ad_errors}")
+        self.no_ad_errors_label.setText("Sem A/D (legado): desativado")
         self.valid_attempts_label.setText(f"Tentativas válidas: {stats.valid_attempts}")
         self.ignored_clicks_label.setText(f"Cliques ignorados: {stats.ignored_clicks}")
         self.current_rate_label.setText(f"Taxa atual: {stats.protocol_rate:.1f}%")
-        self.current_kcred_label.setText(f"KCred desta sessão: +{self.controller.current_session_kcreds}")
+        if self.controller.current_session_mode == "ranked":
+            self.current_kcred_label.setText("Coins nesta sessão: desativadas (Ranked)")
+        else:
+            self.current_kcred_label.setText(f"KCred desta sessão: +{self.controller.current_session_kcreds}")
 
         input_stats = self.controller.live_input_stats
         self.fire_profile_label.setText(
