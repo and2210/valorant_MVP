@@ -143,7 +143,7 @@ class AppController:
     # Sessão
     # ------------------------------------------------------------------
 
-    def start_session(self, session_mode: str = "deathmatch") -> dict[str, Any]:
+    def start_session(self, session_mode: str = "deathmatch", start_source: str = "manual") -> dict[str, Any]:
         if self.has_pending_purchase:
             raise RuntimeError("Existe uma compra pendente antes da próxima sessão.")
 
@@ -152,7 +152,10 @@ class AppController:
 
         self.tracker.stop()
         self.input_timing.reset()
-        start_data = self.session_manager.start_session(session_mode=session_mode)
+        start_data = self.session_manager.start_session(
+            session_mode=session_mode,
+            start_source=start_source,
+        )
         self.sync_state()
         return start_data
 

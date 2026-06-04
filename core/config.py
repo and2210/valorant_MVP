@@ -91,6 +91,9 @@ class AppConfig:
         "strong_day_hours": 2.0,
         "export_filename": "training_calendar_month.csv",
     })
+    session_automation: dict[str, Any] = field(default_factory=lambda: {
+        "auto_arm_enabled": False,
+    })
     protocol: dict[str, Any] = field(default_factory=lambda: {
         "diagonal_footwork_rule_deathmatch": "strict_footwork",
         "diagonal_footwork_rule_ranked": "informational",
@@ -189,6 +192,16 @@ class AppConfig:
         normalized_training_calendar["strong_day_hours"] = max(_to_float(normalized_training_calendar.get("strong_day_hours"), 2.0), 0.1)
         normalized_training_calendar["export_filename"] = str(normalized_training_calendar.get("export_filename") or "training_calendar_month.csv").strip()
 
+        session_automation = data.get("session_automation", defaults.session_automation)
+        if not isinstance(session_automation, dict):
+            session_automation = defaults.session_automation
+
+        normalized_session_automation = dict(defaults.session_automation)
+        normalized_session_automation.update(session_automation)
+        normalized_session_automation["auto_arm_enabled"] = bool(
+            normalized_session_automation.get("auto_arm_enabled", False)
+        )
+
         protocol = data.get("protocol", defaults.protocol)
         if not isinstance(protocol, dict):
             protocol = defaults.protocol
@@ -257,6 +270,7 @@ class AppConfig:
             weapons=normalized_weapons,
             tracker=normalized_tracker,
             training_calendar=normalized_training_calendar,
+            session_automation=normalized_session_automation,
             protocol=normalized_protocol,
             input_timing=normalized_input_timing,
         )

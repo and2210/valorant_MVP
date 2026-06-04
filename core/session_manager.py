@@ -26,6 +26,7 @@ class SessionManager:
         self.input_timing = input_timing or InputTimingTracker(tracker.config)
         self.current_session_weapon = "Classic"
         self.current_session_mode = "deathmatch"
+        self.current_session_start_source = "manual"
         self.session_started_at: datetime | None = None
         self.last_finished_session: DMResult | None = None
 
@@ -38,10 +39,11 @@ class SessionManager:
         self.current_session_mode = normalized if normalized in {"deathmatch", "ranked"} else "deathmatch"
         self.tracker.set_session_mode(self.current_session_mode)
 
-    def start_session(self, session_mode: str = "deathmatch") -> dict:
+    def start_session(self, session_mode: str = "deathmatch", start_source: str = "manual") -> dict:
         wallet = load_wallet()
         self.set_session_mode(session_mode)
         self.last_finished_session = None
+        self.current_session_start_source = str(start_source or "manual")
         self.current_session_weapon = get_next_weapon()
         self.session_started_at = datetime.now()
         if self.current_session_mode == "deathmatch":
@@ -67,9 +69,16 @@ class SessionManager:
         protocol_events = list(stats.protocol_events)
         protocol_summary = {
             "session_mode": self.current_session_mode,
+            "start_source": self.current_session_start_source,
             "diagonal_rule_mode": self.tracker.current_diagonal_rule_mode,
             "protocol_events_total": stats.protocol_events_total,
             "protocol_events": protocol_events,
+            "clean_hits": stats.clean_hits,
+            "brake_errors": stats.brake_errors,
+            "diagonal_errors": stats.diagonal_errors,
+            "ignored_clicks": stats.ignored_clicks,
+            "valid_attempts": stats.valid_attempts,
+            "protocol_rate": round(stats.protocol_rate, 1),
         }
         balance_before = int(wallet.get("balance", 0))
 
@@ -98,7 +107,13 @@ class SessionManager:
         self.session_started_at = None
         if self.current_session_mode == "deathmatch":
             save_wallet(wallet)
-        self.save_session_audit_json(result, protocol_summary)
+        self.save_session_audit_json(
+            result,
+            protocol_summary=protocol_summary,
+            raw_events=list((result.input_payload or {}).get("raw_events", [])),
+            useful_inputs=dict((result.input_payload or {}).get("useful_inputs", {})),
+            protocol_events=protocol_events,
+        )
         return result
 
     def build_result(
@@ -113,11 +128,46 @@ class SessionManager:
         input_stats: InputTimingStats | None = None,
         protocol_summary: dict | None = None,
     ) -> DMResult:
-        input_payload = input_stats.to_dict() if input_stats is not None else {}
-        input_payload["protocol_events"] = list((protocol_summary or {}).get("protocol_events", []))
-        input_payload["protocol_events_total"] = int((protocol_summary or {}).get("protocol_events_total", 0))
-        input_payload["protocol_rule_mode"] = str((protocol_summary or {}).get("diagonal_rule_mode") or "")
-        input_payload["session_mode"] = self.current_session_mode
+        input_data = input_stats.to_dict() if input_stats is not None else {}
+        raw_events = list(input_data.get("raw_events", []))
+        protocol_events = list((protocol_summary or {}).get("protocol_events", []))
+        useful_inputs = {
+            key: value
+            for key, value in input_data.items()
+            if key not in {"raw_events", "raw_events_total"}
+        }
+        useful_inputs["session_mode"] = self.current_session_mode
+        useful_inputs["protocol_rule_mode"] = str((protocol_summary or {}).get("diagonal_rule_mode") or "")
+        useful_inputs["raw_events_total"] = int(input_data.get("raw_events_total", len(raw_events)))
+
+        economy_summary = {
+            "session_mode": self.current_session_mode,
+            "kcreds_earned": int(earned),
+            "balance_before": int(balance_before),
+            "balance_after_earning": int(balance_after_earning),
+            "balance_final": int(balance_after_earning),
+            "pending_purchase_enabled": self.current_session_mode == "deathmatch",
+        }
+        debug_summary = {
+            "start_source": self.current_session_start_source,
+            "weapon_used": self.current_session_weapon,
+            "raw_events_total": int(input_data.get("raw_events_total", len(raw_events))),
+            "protocol_events_total": int((protocol_summary or {}).get("protocol_events_total", 0)),
+            "current_diagonal_rule_mode": str((protocol_summary or {}).get("diagonal_rule_mode") or ""),
+            "audit_version": "v0.21.7",
+        }
+        input_payload = {
+            "raw_events": raw_events,
+            "useful_inputs": useful_inputs,
+            "protocol_events": protocol_events,
+            "protocol_summary": {
+                key: value
+                for key, value in dict(protocol_summary or {}).items()
+                if key != "protocol_events"
+            },
+            "economy_summary": economy_summary,
+            "debug_summary": debug_summary,
+        }
 
         return DMResult(
             session_id=session_id,
@@ -138,25 +188,32 @@ class SessionManager:
             balance_after_earning=balance_after_earning,
             session_mode=self.current_session_mode,
             balance_final=balance_after_earning,
-            input_key_presses=int(input_payload.get("key_presses", 0)),
-            input_mouse_presses=int(input_payload.get("mouse_presses", 0)),
-            input_scroll_events=int(input_payload.get("scroll_events", 0)),
-            input_scroll_jump_events=int(input_payload.get("scroll_jump_events", 0)),
-            input_fire_taps=int(input_payload.get("fire_taps", 0)),
-            input_fire_bursts=int(input_payload.get("fire_bursts", 0)),
-            input_fire_long_sprays=int(input_payload.get("fire_long_sprays", 0)),
-            input_fire_events=int(input_payload.get("fire_events", 0)),
-            input_average_fire_seconds=float(input_payload.get("average_fire_seconds", 0.0)),
-            input_max_fire_seconds=float(input_payload.get("max_fire_seconds", 0.0)),
-            input_shots_while_forward=int(input_payload.get("shots_while_forward", 0)),
-            input_shots_with_crouch=int(input_payload.get("shots_with_crouch", 0)),
-            input_crouch_fire_long_count=int(input_payload.get("crouch_fire_long_count", 0)),
-            input_diagonal_entries=int(input_payload.get("diagonal_entries", 0)),
-            input_diagonal_seconds=float(input_payload.get("diagonal_seconds", 0.0)),
+            input_key_presses=int(useful_inputs.get("key_presses", 0)),
+            input_mouse_presses=int(useful_inputs.get("mouse_presses", 0)),
+            input_scroll_events=int(useful_inputs.get("scroll_events", 0)),
+            input_scroll_jump_events=int(useful_inputs.get("scroll_jump_events", 0)),
+            input_fire_taps=int(useful_inputs.get("fire_taps", 0)),
+            input_fire_bursts=int(useful_inputs.get("fire_bursts", 0)),
+            input_fire_long_sprays=int(useful_inputs.get("fire_long_sprays", 0)),
+            input_fire_events=int(useful_inputs.get("fire_events", 0)),
+            input_average_fire_seconds=float(useful_inputs.get("average_fire_seconds", 0.0)),
+            input_max_fire_seconds=float(useful_inputs.get("max_fire_seconds", 0.0)),
+            input_shots_while_forward=int(useful_inputs.get("shots_while_forward", 0)),
+            input_shots_with_crouch=int(useful_inputs.get("shots_with_crouch", 0)),
+            input_crouch_fire_long_count=int(useful_inputs.get("crouch_fire_long_count", 0)),
+            input_diagonal_entries=int(useful_inputs.get("diagonal_entries", 0)),
+            input_diagonal_seconds=float(useful_inputs.get("diagonal_seconds", 0.0)),
             input_payload=input_payload,
         )
 
-    def save_session_audit_json(self, result: DMResult, protocol_summary: dict[str, object]) -> Path:
+    def save_session_audit_json(
+        self,
+        result: DMResult,
+        protocol_summary: dict[str, object],
+        raw_events: list[dict],
+        useful_inputs: dict[str, object],
+        protocol_events: list[dict],
+    ) -> Path:
         audit_dir = DATA_DIR / "input_audit"
         audit_dir.mkdir(parents=True, exist_ok=True)
 
@@ -170,13 +227,30 @@ class SessionManager:
             "finished_at": result.finished_at,
             "duration_seconds": result.duration_seconds,
             "weapon_used": result.weapon_used,
-            "kcreds_earned": result.kcreds_earned,
-            "balance_before": result.balance_before,
-            "balance_after_earning": result.balance_after_earning,
-            "balance_final": result.balance_final,
-            "protocol_summary": protocol_summary,
-            "protocol_events": list(protocol_summary.get("protocol_events", [])),
-            "input_payload": result.input_payload or {},
+            "raw_events": raw_events,
+            "useful_inputs": useful_inputs,
+            "protocol_events": protocol_events,
+            "protocol_summary": {
+                key: value
+                for key, value in protocol_summary.items()
+                if key != "protocol_events"
+            },
+            "economy_summary": {
+                "session_mode": result.session_mode,
+                "kcreds_earned": result.kcreds_earned,
+                "balance_before": result.balance_before,
+                "balance_after_earning": result.balance_after_earning,
+                "balance_final": result.balance_final,
+                "pending_purchase_enabled": result.session_mode == "deathmatch",
+            },
+            "debug_summary": {
+                "start_source": self.current_session_start_source,
+                "weapon_used": result.weapon_used,
+                "raw_events_total": len(raw_events),
+                "protocol_events_total": len(protocol_events),
+                "current_diagonal_rule_mode": self.tracker.current_diagonal_rule_mode,
+                "audit_version": "v0.21.7",
+            },
         }
 
         with audit_path.open("w", encoding="utf-8") as file:

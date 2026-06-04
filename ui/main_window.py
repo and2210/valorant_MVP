@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import calendar
+import ctypes
+import os
 from datetime import date
 
 from pynput import keyboard, mouse
@@ -467,12 +469,14 @@ class MainWindow(QWidget):
         self.setting_diagonal_rule.addItem("Shot-Linked", "shot_linked")
         self.setting_diagonal_rule.addItem("Informational", "informational")
         self.setting_diagonal_rule.addItem("Disabled", "disabled")
+        self.setting_auto_arm = QCheckBox("Enable Auto-Arm session start")
         protocol_form.addRow("Tempo máximo do episódio:", self.setting_episode_timeout)
         protocol_form.addRow("Cooldown pós-clique:", self.setting_click_cooldown)
         protocol_form.addRow("Disparo parado:", self.setting_stationary_clean)
         protocol_form.addRow("Tempo mínimo parado:", self.setting_stationary_release)
         protocol_form.addRow("Regra extra:", self.setting_require_release)
         protocol_form.addRow("Diagonal footwork (DM):", self.setting_diagonal_rule)
+        protocol_form.addRow("Session start:", self.setting_auto_arm)
         root.addWidget(protocol_group)
 
         input_group = QGroupBox("Input timing")
@@ -638,6 +642,8 @@ class MainWindow(QWidget):
             self.setting_diagonal_rule,
             str(protocol_settings.get("diagonal_footwork_rule_deathmatch", "strict_footwork")),
         )
+        automation_settings = dict(config.session_automation or {})
+        self.setting_auto_arm.setChecked(bool(automation_settings.get("auto_arm_enabled", False)))
 
         input_settings = dict(config.input_timing or {})
         self.setting_input_enabled.setChecked(bool(input_settings.get("enabled", True)))
@@ -689,6 +695,11 @@ class MainWindow(QWidget):
             "strong_day_hours": self.setting_strong_day.value(),
         })
 
+        automation_settings = dict(current.session_automation or {})
+        automation_settings.update({
+            "auto_arm_enabled": self.setting_auto_arm.isChecked(),
+        })
+
         protocol_settings = dict(current.protocol or {})
         protocol_settings.update({
             "diagonal_footwork_rule_deathmatch": str(self.setting_diagonal_rule.currentData() or "strict_footwork"),
@@ -720,6 +731,7 @@ class MainWindow(QWidget):
             "weapons": current.weapons,
             "tracker": tracker_settings,
             "training_calendar": calendar_settings,
+            "session_automation": automation_settings,
             "protocol": protocol_settings,
             "input_timing": input_settings,
         })
@@ -738,6 +750,7 @@ class MainWindow(QWidget):
         self.app_config = load_config()
         self.calendar_settings = self.app_config.training_calendar
         self.controller = AppController()
+        self.last_runtime_revision = -1
         self.refresh_api_key_status()
         self.refresh_all()
         self.settings_status_label.setText("Configurações salvas e recarregadas.")
@@ -751,6 +764,7 @@ class MainWindow(QWidget):
         self.app_config = load_config()
         self.calendar_settings = self.app_config.training_calendar
         self.load_settings_into_form(self.app_config)
+        self.last_runtime_revision = -1
         self.refresh_api_key_status()
         self.refresh_training_calendar_table()
         self.settings_status_label.setText("Configurações recarregadas do arquivo.")
@@ -801,10 +815,71 @@ class MainWindow(QWidget):
         self.mouse_listener = None
 
     def _update_capture_listeners(self) -> None:
-        if self.controller.is_session_active:
+        if self.controller.is_session_active or self.is_auto_arm_enabled():
             self._ensure_mouse_listener()
         else:
             self._stop_mouse_listener()
+
+    def is_auto_arm_enabled(self) -> bool:
+        settings = dict(self.app_config.session_automation or {})
+        return bool(settings.get("auto_arm_enabled", False))
+
+    def get_runtime_status_text(self) -> str:
+        if self.controller.is_session_active:
+            if self.controller.current_session_mode == "ranked":
+                return "Ranked Audit Active"
+            return "Session Active"
+        if self.is_auto_arm_enabled():
+            return "Auto-Armed"
+        return "Manual"
+
+    def get_foreground_window_title(self) -> str:
+        if os.name != "nt":
+            return ""
+
+        try:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if not hwnd:
+                return ""
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return ""
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
+            return buffer.value.strip()
+        except Exception:
+            return ""
+
+    def is_valorant_focused(self) -> bool:
+        return "valorant" in self.get_foreground_window_title().lower()
+
+    def maybe_auto_start_session(self, trigger_input: str) -> bool:
+        if self.controller.is_session_active:
+            return False
+        if not self.is_auto_arm_enabled():
+            return False
+        if self.controller.has_pending_purchase:
+            return False
+        if trigger_input not in {"w", "a", "s", "d", "mouse_left"}:
+            return False
+        if self.selected_session_mode() not in {"deathmatch", "ranked"}:
+            return False
+        if not self.is_valorant_focused():
+            return False
+
+        try:
+            start_data = self.controller.start_session(
+                self.selected_session_mode(),
+                start_source="auto_arm",
+            )
+        except RuntimeError:
+            return False
+
+        self._update_capture_listeners()
+        self.current_weapon_label.setText(f"Arma da sessão: {start_data['weapon']}")
+        self.refresh_live_stats()
+        self.refresh_buttons()
+        return True
 
     def _on_key_press(self, key):
         if key == keyboard.Key.f10:
@@ -819,9 +894,12 @@ class MainWindow(QWidget):
         if key == keyboard.Key.f12:
             self.signals.shutdown_requested.emit()
             return False
+        key_name = self.get_key_name(key)
+        if not self.controller.is_session_active:
+            self.maybe_auto_start_session(key_name)
         if not self.controller.is_session_active:
             return
-        self.controller.handle_key_press(self.get_key_name(key))
+        self.controller.handle_key_press(key_name)
 
     def _on_key_release(self, key):
         if not self.controller.is_session_active:
@@ -829,9 +907,11 @@ class MainWindow(QWidget):
         self.controller.handle_key_release(self.get_key_name(key))
 
     def _on_click(self, x, y, button, pressed):
+        button_name = InputTimingTracker.mouse_button_to_input_id(button)
+        if not self.controller.is_session_active and pressed:
+            self.maybe_auto_start_session(button_name)
         if not self.controller.is_session_active:
             return
-        button_name = InputTimingTracker.mouse_button_to_input_id(button)
         self.controller.handle_mouse_button(button_name, bool(pressed))
 
     def _on_scroll(self, x, y, dx, dy):
@@ -856,7 +936,7 @@ class MainWindow(QWidget):
         if self.controller.has_pending_purchase:
             QMessageBox.information(self, "Compra pendente", "Confirme a arma do próximo DM antes de iniciar outra sessão.")
             return
-        start_data = self.controller.start_session(self.selected_session_mode())
+        start_data = self.controller.start_session(self.selected_session_mode(), start_source="manual")
         self._update_capture_listeners()
         self.current_weapon_label.setText(f"Arma da sessão: {start_data['weapon']}")
         self.refresh_live_stats()
@@ -1090,7 +1170,7 @@ class MainWindow(QWidget):
         is_active = self.controller.is_session_active
         has_pending_purchase = self.controller.has_pending_purchase
         self._update_capture_listeners()
-        self.status_label.setText("Status: LIGADO" if is_active else "Status: DESLIGADO")
+        self.status_label.setText(f"Status: {self.get_runtime_status_text()}")
         self.start_button.setEnabled((not is_active) and (not has_pending_purchase))
         self.finish_button.setEnabled(is_active)
         self.reset_button.setEnabled(is_active)
