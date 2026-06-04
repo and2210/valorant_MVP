@@ -83,19 +83,17 @@ class AppController:
 
     def handle_key_press(self, key_name: str) -> None:
         self.input_timing.on_key_press(key_name)
-        self.tracker.on_key_press(key_name)
         self.sync_state()
 
     def handle_key_release(self, key_name: str) -> None:
         self.input_timing.on_key_release(key_name)
-        self.tracker.on_key_release(key_name)
         self.sync_state()
 
     def handle_mouse_button(self, button_name: str, pressed: bool) -> None:
         self.input_timing.on_mouse_button(button_name, pressed)
 
         if button_name == "mouse_left" and pressed:
-            self.tracker.on_left_click()
+            self.tracker.on_left_click(self.input_timing.build_fire_context())
 
         self.sync_state()
 
@@ -106,7 +104,7 @@ class AppController:
     def handle_left_click(self) -> None:
         # Compatibilidade com chamadas antigas. Para medir duração de tiro,
         # prefira handle_mouse_button("mouse_left", pressed).
-        self.tracker.on_left_click()
+        self.tracker.on_left_click(self.input_timing.build_fire_context())
         self.sync_state()
 
     # ------------------------------------------------------------------
@@ -120,6 +118,8 @@ class AppController:
         if self.is_session_active:
             raise RuntimeError("A sessão já está ativa.")
 
+        self.tracker.stop()
+        self.input_timing.reset()
         start_data = self.session_manager.start_session()
         self.sync_state()
         return start_data
@@ -140,11 +140,13 @@ class AppController:
         return "started", self.start_session()
 
     def reset_counters(self) -> None:
+        was_active = self.is_session_active
+        self.tracker.stop()
         self.tracker.reset_counters()
-        if self.input_timing.enabled:
+        self.input_timing.reset()
+        if was_active:
+            self.tracker.start()
             self.input_timing.start()
-        else:
-            self.input_timing.reset()
         self.sync_state()
 
     def stop_without_saving(self) -> None:
@@ -152,6 +154,7 @@ class AppController:
             self.tracker.stop()
         if self.input_timing.enabled:
             self.input_timing.stop()
+        self.input_timing.reset()
 
         self.sync_state()
 
