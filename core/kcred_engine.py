@@ -5,6 +5,10 @@ from typing import Any
 from core.config import AppConfig, load_config
 
 
+def clamp_session_kcreds(value: int | float) -> int:
+    return max(int(value), 0)
+
+
 def calculate_kcreds(clean_hits: int, kcred_per_clean_hit: int | None = None) -> int:
     """
     Compatibilidade com chamadas antigas: calcula KCred bruto somente por acerto limpo.
@@ -30,7 +34,7 @@ def calculate_session_kcreds(stats: Any, config: AppConfig | None = None) -> int
     gross = calculate_kcreds(getattr(stats, "clean_hits", 0), config.kcred_per_clean_hit)
     penalty = calculate_session_kcred_penalty(stats, config)
 
-    return max(gross - penalty, 0)
+    return clamp_session_kcreds(gross - penalty)
 
 
 def calculate_session_kcred_penalty(stats: Any, config: AppConfig | None = None) -> int:
@@ -49,6 +53,7 @@ def calculate_session_kcred_penalty(stats: Any, config: AppConfig | None = None)
 
 def apply_session_earning(wallet: dict, earned: int) -> tuple[dict, int, int]:
     balance_before = int(wallet.get("balance", 0))
+    earned = clamp_session_kcreds(earned)
 
     wallet["balance"] = balance_before + earned
     wallet["total_earned"] = int(wallet.get("total_earned", 0)) + earned

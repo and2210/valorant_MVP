@@ -232,7 +232,7 @@ class MainWindow(QWidget):
         self.clean_hits_label = QLabel("Acertos limpos: 0")
         self.brake_errors_label = QLabel("Erros de freio: 0")
         self.diagonal_errors_label = QLabel("Erros de diagonal: 0")
-        self.no_ad_errors_label = QLabel("Erros sem A/D: 0")
+        self.no_ad_errors_label = QLabel("Sem A/D (desativado): 0")
         self.valid_attempts_label = QLabel("Tentativas válidas: 0")
         self.ignored_clicks_label = QLabel("Cliques ignorados: 0")
         self.current_rate_label = QLabel("Taxa atual: 0.0%")
@@ -1522,11 +1522,14 @@ class MainWindow(QWidget):
         self.clean_hits_label.setText(f"Acertos limpos: {stats.clean_hits}")
         self.brake_errors_label.setText(f"Erros de freio: {stats.brake_errors}")
         self.diagonal_errors_label.setText(f"Erros de diagonal: {stats.diagonal_errors}")
-        self.no_ad_errors_label.setText(f"Erros sem A/D: {stats.no_ad_errors}")
+        self.no_ad_errors_label.setText(f"Sem A/D (desativado): {stats.no_ad_errors}")
         self.valid_attempts_label.setText(f"Tentativas válidas: {stats.valid_attempts}")
         self.ignored_clicks_label.setText(f"Cliques ignorados: {stats.ignored_clicks}")
         self.current_rate_label.setText(f"Taxa atual: {stats.protocol_rate:.1f}%")
-        self.current_kcred_label.setText(f"KCred desta sessão: +{self.controller.current_session_kcreds}")
+        if self.controller.current_session_mode == "ranked":
+            self.current_kcred_label.setText("Ranked: auditoria ativa, KCred desativado")
+        else:
+            self.current_kcred_label.setText(f"KCred desta sessão: +{self.controller.current_session_kcreds}")
 
         input_stats = self.controller.live_input_stats
         self.fire_profile_label.setText(
@@ -1548,9 +1551,12 @@ class MainWindow(QWidget):
             f"{input_stats.diagonal_seconds:.2f}s | "
             f"WASD {input_stats.wasd_seconds:.1f}s"
         )
+        active_state = input_stats.active_state_snapshot or {}
+        active_text = "".join(key.upper() for key in ["w", "a", "s", "d"] if active_state.get(key)) or "-"
         self.input_actions_label.setText(
             f"Raw {input_stats.raw_event_count} | "
-            f"LMB {input_stats.lmb_clicks} | "
+            f"LMB {input_stats.lmb_down_count}/{input_stats.lmb_up_count} | "
+            f"Ativo {active_text} | "
             f"SHIFT {input_stats.shift_seconds:.1f}s | "
             f"CTRL {input_stats.ctrl_seconds:.1f}s | "
             f"scroll {input_stats.scroll_events} | "

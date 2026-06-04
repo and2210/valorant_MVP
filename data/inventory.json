@@ -1,11 +1,111 @@
 {
     "next_weapon": "Classic",
     "owned_weapons": [
-        "Classic"
+        "Classic",
+        "Ghost",
+        "Bulldog",
+        "Sheriff",
+        "Operator"
     ],
-    "purchase_history": [],
+    "purchase_history": [
+        {
+            "balance_after_purchase": 1740,
+            "cost": 0,
+            "datetime": "2026-06-03 12:04:19",
+            "session_id": 11,
+            "weapon": "Classic"
+        },
+        {
+            "balance_after_purchase": 1850,
+            "cost": 0,
+            "datetime": "2026-06-03 12:04:44",
+            "session_id": 12,
+            "weapon": "Classic"
+        },
+        {
+            "balance_after_purchase": 1840,
+            "cost": 500,
+            "datetime": "2026-06-03 16:05:54",
+            "session_id": 15,
+            "weapon": "Ghost"
+        },
+        {
+            "balance_after_purchase": 1025,
+            "cost": 2050,
+            "datetime": "2026-06-03 16:20:58",
+            "session_id": 16,
+            "weapon": "Bulldog"
+        },
+        {
+            "balance_after_purchase": 1075,
+            "cost": 800,
+            "datetime": "2026-06-03 16:56:39",
+            "session_id": 17,
+            "weapon": "Sheriff"
+        },
+        {
+            "balance_after_purchase": 1615,
+            "cost": 0,
+            "datetime": "2026-06-03 17:16:32",
+            "session_id": 18,
+            "weapon": "Classic"
+        },
+        {
+            "balance_after_purchase": 2235,
+            "cost": 0,
+            "datetime": "2026-06-03 18:05:09",
+            "session_id": 19,
+            "weapon": "Classic"
+        },
+        {
+            "balance_after_purchase": 2855,
+            "cost": 0,
+            "datetime": "2026-06-03 18:43:24",
+            "session_id": 20,
+            "weapon": "Classic"
+        },
+        {
+            "balance_after_purchase": 3755,
+            "cost": 0,
+            "datetime": "2026-06-03 19:25:30",
+            "session_id": 22,
+            "weapon": "Classic"
+        },
+        {
+            "balance_after_purchase": 3775,
+            "cost": 0,
+            "datetime": "2026-06-03 19:37:54",
+            "session_id": 23,
+            "weapon": "Classic"
+        },
+        {
+            "balance_after_purchase": 4845,
+            "cost": 0,
+            "datetime": "2026-06-03 19:48:49",
+            "session_id": 24,
+            "weapon": "Classic"
+        },
+        {
+            "balance_after_purchase": 205,
+            "cost": 4700,
+            "datetime": "2026-06-03 19:49:38",
+            "session_id": 25,
+            "weapon": "Operator"
+        },
+        {
+            "balance_after_purchase": 1645,
+            "cost": 0,
+            "datetime": "2026-06-03 22:35:49",
+            "session_id": 27,
+            "weapon": "Classic"
+        }
+    ],
     "weapon_usage": {
-        "Classic": 1
+        "Bulldog": 1,
+        "Classic": 16,
+        "Ghost": 1,
+        "Operator": 2,
+        "Sheriff": 1
     },
     "version": 1
 }

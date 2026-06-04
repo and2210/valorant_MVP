@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -180,6 +181,7 @@ class SessionManager:
                 "kcreds_earned": result.kcreds_earned,
             },
             "summary": input_stats.to_dict(),
+            "protocol_summary": asdict(self.tracker.stats),
             "raw_events": self.input_timing.raw_events_to_dicts(),
         }
 

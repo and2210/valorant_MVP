@@ -1,0 +1,95 @@
+{
+  "session": {
+    "session_id": 23,
+    "session_ref": "session_0023",
+    "session_mode": "dm_training",
+    "training_method": "first_shot_hs",
+    "started_at": "2026-06-03 19:35:56",
+    "finished_at": "2026-06-03 19:37:28",
+    "duration_seconds": 92,
+    "weapon_used": "Classic",
+    "kcreds_earned": 20
+  },
+  "summary": {
+    "key_presses": 0,
+    "mouse_presses": 1,
+    "scroll_events": 0,
+    "scroll_jump_events": 0,
+    "fire_taps": 1,
+    "fire_bursts": 0,
+    "fire_long_sprays": 0,
+    "fire_events": 1,
+    "total_fire_seconds": 0.078,
+    "max_fire_seconds": 0.078,
+    "shots_while_forward": 0,
+    "shots_with_crouch": 0,
+    "crouch_fire_long_count": 0,
+    "crouch_presses": 0,
+    "walk_presses": 0,
+    "jump_presses": 0,
+    "ability_presses": 0,
+    "reload_presses": 0,
+    "interact_presses": 0,
+    "scoreboard_presses": 0,
+    "diagonal_entries": 0,
+    "diagonal_seconds": 0.0,
+    "forward_seconds": 0.0,
+    "lateral_seconds": 0.0,
+    "wasd_seconds": 0.0,
+    "shift_seconds": 0.0,
+    "ctrl_seconds": 0.0,
+    "raw_event_count": 2,
+    "lmb_clicks": 1,
+    "possible_crouch_sprays": 0,
+    "jump_window_events": 0,
+    "jump_window_active_seconds": 0.0,
+    "action_counts": {
+      "fire": 1
+    },
+    "average_fire_seconds": 0.078
+  },
+  "raw_events": [
+    {
+      "event_index": 1,
+      "event_type": "mouse_down",
+      "input_id": "mouse_left",
+      "action": "fire",
+      "session_active": true,
+      "session_ref": "2026-06-03 19:35:56",
+      "session_mode": "dm_training",
+      "training_method": "first_shot_hs",
+      "windows_timestamp": "2026-06-03T19:37:28.867",
+      "monotonic_timestamp": 13619.812,
+      "duration_seconds": null,
+      "active_state": {
+        "w": false,
+        "a": false,
+        "s": false,
+        "d": false,
+        "ctrl": false,
+        "shift": false
+      }
+    },
+    {
+      "event_index": 2,
+      "event_type": "mouse_up",
+      "input_id": "mouse_left",
+      "action": "fire",
+      "session_active": true,
+      "session_ref": "2026-06-03 19:35:56",
+      "session_mode": "dm_training",
+      "training_method": "first_shot_hs",
+      "windows_timestamp": "2026-06-03T19:37:28.942",
+      "monotonic_timestamp": 13619.89,
+      "duration_seconds": 0.078,
+      "active_state": {
+        "w": false,
+        "a": false,
+        "s": false,
+        "d": false,
+        "ctrl": false,
+        "shift": false
+      }
+    }
+  ]
+}

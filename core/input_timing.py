@@ -70,9 +70,16 @@ class InputTimingStats:
     shift_seconds: float = 0.0
     ctrl_seconds: float = 0.0
     raw_event_count: int = 0
+    raw_events_total: int = 0
+    useful_key_presses: int = 0
     lmb_clicks: int = 0
+    lmb_down_count: int = 0
+    lmb_up_count: int = 0
+    orphan_key_ups: int = 0
     possible_crouch_sprays: int = 0
     jump_window_events: int = 0
+    jump_window_active_seconds: float = 0.0
+    active_state_snapshot: dict[str, bool] = field(default_factory=dict)
     action_counts: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -92,6 +99,7 @@ class InputTimingStats:
         data["wasd_seconds"] = round(self.wasd_seconds, 4)
         data["shift_seconds"] = round(self.shift_seconds, 4)
         data["ctrl_seconds"] = round(self.ctrl_seconds, 4)
+        data["jump_window_active_seconds"] = round(self.jump_window_active_seconds, 4)
         return data
 
 
@@ -108,6 +116,9 @@ class InputTimingTracker:
     FORWARD_ACTIONS = {"forward", "backward"}
     LATERAL_ACTIONS = {"left", "right"}
     ABILITY_ACTIONS = {"ability_q", "ability_e", "ability_c", "ultimate", "ability_v", "ability_z"}
+    JUMP_ACTIONS = {"jump", "scroll_jump"}
+    SCROLL_JUMP_DEBOUNCE_SECONDS = 0.30
+    JUMP_WINDOW_SECONDS = 1.50
 
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or load_config()
@@ -123,6 +134,9 @@ class InputTimingTracker:
         self.session_ref = ""
         self.session_mode = "dm_training"
         self.training_method = ""
+        self.jump_window_until = 0.0
+        self.last_jump_intent_at = 0.0
+        self.jump_window_tracked_keys: set[str] = set()
 
     @staticmethod
     def _normalize_action_map(raw_map: dict[str, Any]) -> dict[str, str]:
@@ -218,6 +232,7 @@ class InputTimingTracker:
             self._complete_interval(input_id, action, started_at, now)
 
         self.active_inputs.clear()
+        self.stats.active_state_snapshot = self._active_state_snapshot()
         self.enabled = False
         self.diagonal_active = False
         return self.stats
@@ -227,8 +242,12 @@ class InputTimingTracker:
         self.intervals = []
         self.raw_events = []
         self.stats = InputTimingStats()
+        self.stats.active_state_snapshot = self._active_state_snapshot()
         self.last_state_update = time.monotonic()
         self.diagonal_active = False
+        self.jump_window_until = 0.0
+        self.last_jump_intent_at = 0.0
+        self.jump_window_tracked_keys = set()
 
     def snapshot(self) -> InputTimingStats:
         if not self.enabled:
@@ -253,6 +272,10 @@ class InputTimingTracker:
     def has_action(self, action: str) -> bool:
         return action in self.active_actions()
 
+    def is_jump_window_active(self, now: float | None = None) -> bool:
+        current_time = time.monotonic() if now is None else now
+        return current_time <= self.jump_window_until
+
     def _update_continuous_state(self, now: float) -> None:
         elapsed = max(now - self.last_state_update, 0.0)
         if elapsed <= 0:
@@ -274,6 +297,8 @@ class InputTimingTracker:
             self.stats.shift_seconds += elapsed
         if self.has_action("crouch"):
             self.stats.ctrl_seconds += elapsed
+        if self.is_jump_window_active(now):
+            self.stats.jump_window_active_seconds += elapsed
 
         currently_diagonal = has_forward and has_lateral
         if currently_diagonal and not self.diagonal_active:
@@ -334,25 +359,62 @@ class InputTimingTracker:
         )
         self.raw_events.append(event)
         self.stats.raw_event_count = len(self.raw_events)
+        self.stats.raw_events_total = len(self.raw_events)
+        self.stats.active_state_snapshot = dict(event.active_state)
+
+    def _register_jump_intent(self, action: str, now: float) -> bool:
+        debounce_seconds = float(
+            self.settings.get("scroll_jump_debounce_seconds", self.SCROLL_JUMP_DEBOUNCE_SECONDS)
+        )
+        if debounce_seconds <= 0:
+            debounce_seconds = self.SCROLL_JUMP_DEBOUNCE_SECONDS
+
+        if self.last_jump_intent_at > 0 and (now - self.last_jump_intent_at) < debounce_seconds:
+            self.jump_window_until = max(self.jump_window_until, now + self.JUMP_WINDOW_SECONDS)
+            return False
+
+        self.last_jump_intent_at = now
+        self.jump_window_until = now + self.JUMP_WINDOW_SECONDS
+        self.stats.scroll_jump_events += 1
+        self.stats.jump_presses += 1
+        self.stats.action_counts[action] = self.stats.action_counts.get(action, 0) + 1
+        return True
+
+    def note_jump_window_movement(self, key_name: str, now: float | None = None) -> bool:
+        input_id = self.normalize_input_id(key_name)
+        if input_id not in {"w", "a", "s", "d"}:
+            return False
+
+        current_time = time.monotonic() if now is None else now
+        if not self.is_jump_window_active(current_time):
+            return False
+        if input_id in self.jump_window_tracked_keys:
+            return False
+
+        self.jump_window_tracked_keys.add(input_id)
+        self.stats.jump_window_events += 1
+        return True
 
     def on_key_press(self, raw_key: str) -> None:
         if not self.enabled:
-            return
+            return None
 
         input_id = self.normalize_input_id(raw_key)
         action = self.action_map.get(input_id)
         if not action:
-            return
+            return None
 
         if input_id in self.active_inputs:
-            return
+            return None
 
         now = time.monotonic()
         self._update_continuous_state(now)
         self.active_inputs[input_id] = (action, now)
         self._record_raw_event("key_down", input_id, action, now)
         self.stats.key_presses += 1
+        self.stats.useful_key_presses += 1
         self._register_action_count(action)
+        return None
 
     def on_key_release(self, raw_key: str) -> None:
         if not self.enabled:
@@ -360,11 +422,18 @@ class InputTimingTracker:
 
         input_id = self.normalize_input_id(raw_key)
         if input_id not in self.active_inputs:
+            action = self.action_map.get(input_id, "")
+            if action:
+                now = time.monotonic()
+                self._update_continuous_state(now)
+                self.stats.orphan_key_ups += 1
+                self._record_raw_event("key_up_orphan", input_id, action, now)
             return
 
         now = time.monotonic()
         self._update_continuous_state(now)
         action, started_at = self.active_inputs.pop(input_id)
+        self.jump_window_tracked_keys.discard(input_id)
         self._record_raw_event("key_up", input_id, action, now, now - started_at)
         self._complete_interval(input_id, action, started_at, now)
 
@@ -391,6 +460,7 @@ class InputTimingTracker:
 
             if action == "fire":
                 self.stats.lmb_clicks += 1
+                self.stats.lmb_down_count += 1
                 if self.has_forward():
                     self.stats.shots_while_forward += 1
                 if self.has_action("crouch"):
@@ -401,6 +471,8 @@ class InputTimingTracker:
             return
 
         stored_action, started_at = self.active_inputs.pop(input_id)
+        if stored_action == "fire":
+            self.stats.lmb_up_count += 1
         self._record_raw_event("mouse_up", input_id, stored_action, now, now - started_at)
         self._complete_interval(input_id, stored_action, started_at, now)
 
@@ -417,11 +489,12 @@ class InputTimingTracker:
         self._update_continuous_state(now)
         self._record_raw_event("scroll", input_id, action, now)
         self.stats.scroll_events += 1
-        self._register_action_count(action)
 
-        if action in {"jump", "scroll_jump"}:
-            self.stats.scroll_jump_events += 1
-            self.stats.jump_window_events += 1
+        if action in self.JUMP_ACTIONS:
+            self._register_jump_intent(action, now)
+            return
+
+        self._register_action_count(action)
 
     def _complete_interval(self, input_id: str, action: str, started_at: float, finished_at: float) -> None:
         duration = max(finished_at - started_at, 0.0)

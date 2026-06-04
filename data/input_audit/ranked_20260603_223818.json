@@ -1,0 +1,120 @@
+{
+  "session": {
+    "session_id": 0,
+    "session_ref": "ranked_20260603_223818",
+    "session_mode": "ranked",
+    "training_method": "first_shot_hs",
+    "started_at": "2026-06-03 22:38:18",
+    "finished_at": "2026-06-03 22:38:20",
+    "duration_seconds": 1,
+    "weapon_used": "Ranked",
+    "kcreds_earned": 0
+  },
+  "summary": {
+    "key_presses": 0,
+    "mouse_presses": 1,
+    "scroll_events": 0,
+    "scroll_jump_events": 0,
+    "fire_taps": 1,
+    "fire_bursts": 0,
+    "fire_long_sprays": 0,
+    "fire_events": 1,
+    "total_fire_seconds": 0.078,
+    "max_fire_seconds": 0.078,
+    "shots_while_forward": 0,
+    "shots_with_crouch": 0,
+    "crouch_fire_long_count": 0,
+    "crouch_presses": 0,
+    "walk_presses": 0,
+    "jump_presses": 0,
+    "ability_presses": 0,
+    "reload_presses": 0,
+    "interact_presses": 0,
+    "scoreboard_presses": 0,
+    "diagonal_entries": 0,
+    "diagonal_seconds": 0.0,
+    "forward_seconds": 0.0,
+    "lateral_seconds": 0.0,
+    "wasd_seconds": 0.0,
+    "shift_seconds": 0.0,
+    "ctrl_seconds": 0.0,
+    "raw_event_count": 2,
+    "raw_events_total": 2,
+    "useful_key_presses": 0,
+    "lmb_clicks": 1,
+    "lmb_down_count": 1,
+    "lmb_up_count": 1,
+    "orphan_key_ups": 0,
+    "possible_crouch_sprays": 0,
+    "jump_window_events": 0,
+    "jump_window_active_seconds": 0.0,
+    "active_state_snapshot": {
+      "w": false,
+      "a": false,
+      "s": false,
+      "d": false,
+      "ctrl": false,
+      "shift": false
+    },
+    "action_counts": {
+      "fire": 1
+    },
+    "average_fire_seconds": 0.078
+  },
+  "protocol_summary": {
+    "clean_hits": 1,
+    "brake_errors": 0,
+    "diagonal_errors": 0,
+    "no_ad_errors": 0,
+    "ignored_clicks": 0,
+    "clicks_while_holding_lateral": 0,
+    "valid_stationary_clicks": 1,
+    "click_while_moving_errors": 0,
+    "diagonal_fire_errors": 0,
+    "ws_fire_errors": 0
+  },
+  "raw_events": [
+    {
+      "event_index": 1,
+      "event_type": "mouse_down",
+      "input_id": "mouse_left",
+      "action": "fire",
+      "session_active": true,
+      "session_ref": "2026-06-03 22:38:18",
+      "session_mode": "ranked",
+      "training_method": "first_shot_hs",
+      "windows_timestamp": "2026-06-03T22:38:20.091",
+      "monotonic_timestamp": 24471.031,
+      "duration_seconds": null,
+      "active_state": {
+        "w": false,
+        "a": false,
+        "s": false,
+        "d": false,
+        "ctrl": false,
+        "shift": false
+      }
+    },
+    {
+      "event_index": 2,
+      "event_type": "mouse_up",
+      "input_id": "mouse_left",
+      "action": "fire",
+      "session_active": true,
+      "session_ref": "2026-06-03 22:38:18",
+      "session_mode": "ranked",
+      "training_method": "first_shot_hs",
+      "windows_timestamp": "2026-06-03T22:38:20.163",
+      "monotonic_timestamp": 24471.109,
+      "duration_seconds": 0.078,
+      "active_state": {
+        "w": false,
+        "a": false,
+        "s": false,
+        "d": false,
+        "ctrl": false,
+        "shift": false
+      }
+    }
+  ]
+}

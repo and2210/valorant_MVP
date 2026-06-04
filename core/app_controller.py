@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.config import MOVEMENT_KEYS
 from core.dashboard import DashboardStats, build_dashboard_stats
 from core.input_timing import InputTimingStats, InputTimingTracker
 from core.inventory import get_weapon_by_name, list_weapons_with_status
@@ -37,6 +38,7 @@ class AppController:
         self.input_timing = InputTimingTracker(self.tracker.config)
         self.session_manager = SessionManager(self.tracker, self.input_timing)
         self.state = AppState(current_weapon=self.session_manager.current_session_weapon)
+        self.protocol_ignored_movement_keys: set[str] = set()
 
     # ------------------------------------------------------------------
     # Estado
@@ -57,6 +59,10 @@ class AppController:
     @property
     def current_weapon(self) -> str:
         return self.session_manager.current_session_weapon
+
+    @property
+    def current_session_mode(self) -> str:
+        return self.session_manager.current_session_mode
 
     @property
     def live_stats(self) -> ProtocolStats:
@@ -89,11 +95,19 @@ class AppController:
 
     def handle_key_press(self, key_name: str) -> None:
         self.input_timing.on_key_press(key_name)
+        if key_name in MOVEMENT_KEYS and self.input_timing.note_jump_window_movement(key_name):
+            self.protocol_ignored_movement_keys.add(key_name)
+            self.sync_state()
+            return
         self.tracker.on_key_press(key_name)
         self.sync_state()
 
     def handle_key_release(self, key_name: str) -> None:
         self.input_timing.on_key_release(key_name)
+        if key_name in self.protocol_ignored_movement_keys:
+            self.protocol_ignored_movement_keys.discard(key_name)
+            self.sync_state()
+            return
         self.tracker.on_key_release(key_name)
         self.sync_state()
 
@@ -101,6 +115,11 @@ class AppController:
         self.input_timing.on_mouse_button(button_name, pressed)
 
         if button_name == "mouse_left" and pressed:
+            active_movement = self.input_timing.active_input_ids().intersection(MOVEMENT_KEYS)
+            if self.input_timing.is_jump_window_active() and active_movement:
+                self.sync_state()
+                return
+            self.sync_protocol_movement_state()
             self.tracker.on_left_click()
 
         self.sync_state()
@@ -112,8 +131,20 @@ class AppController:
     def handle_left_click(self) -> None:
         # Compatibilidade com chamadas antigas. Para medir duração de tiro,
         # prefira handle_mouse_button("mouse_left", pressed).
+        self.sync_protocol_movement_state()
         self.tracker.on_left_click()
         self.sync_state()
+
+    def sync_protocol_movement_state(self) -> None:
+        active_movement = self.input_timing.active_input_ids().intersection(MOVEMENT_KEYS)
+
+        for key_name in list(self.tracker.pressed_keys):
+            if key_name not in active_movement:
+                self.tracker.on_key_release(key_name)
+
+        for key_name in active_movement:
+            self.protocol_ignored_movement_keys.discard(key_name)
+            self.tracker.on_key_press(key_name)
 
     # ------------------------------------------------------------------
     # Sessão
@@ -126,6 +157,7 @@ class AppController:
         if self.is_session_active:
             raise RuntimeError("A sessão já está ativa.")
 
+        self.protocol_ignored_movement_keys.clear()
         start_data = self.session_manager.start_session(
             session_mode=session_mode,
             training_method=training_method,
@@ -138,6 +170,7 @@ class AppController:
             raise RuntimeError("Não existe sessão ativa para encerrar.")
 
         result = self.session_manager.finish_session()
+        self.protocol_ignored_movement_keys.clear()
         self.state.has_pending_purchase = result.session_mode == "dm_training"
         self.sync_state()
         return result
@@ -150,6 +183,7 @@ class AppController:
 
     def reset_counters(self) -> None:
         self.tracker.reset_counters()
+        self.protocol_ignored_movement_keys.clear()
         if self.input_timing.enabled:
             session_ref = self.input_timing.session_ref
             self.input_timing.start(
@@ -166,6 +200,7 @@ class AppController:
             self.tracker.stop()
         if self.input_timing.enabled:
             self.input_timing.stop()
+        self.protocol_ignored_movement_keys.clear()
 
         self.sync_state()
 

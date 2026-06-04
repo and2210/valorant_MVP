@@ -1,0 +1,179 @@
+{
+  "session": {
+    "session_id": 25,
+    "session_ref": "session_0025",
+    "session_mode": "dm_training",
+    "training_method": "first_shot_hs",
+    "started_at": "2026-06-03 19:49:20",
+    "finished_at": "2026-06-03 19:49:26",
+    "duration_seconds": 6,
+    "weapon_used": "Classic",
+    "kcreds_earned": 60
+  },
+  "summary": {
+    "key_presses": 0,
+    "mouse_presses": 3,
+    "scroll_events": 0,
+    "scroll_jump_events": 0,
+    "fire_taps": 3,
+    "fire_bursts": 0,
+    "fire_long_sprays": 0,
+    "fire_events": 3,
+    "total_fire_seconds": 0.234,
+    "max_fire_seconds": 0.094,
+    "shots_while_forward": 0,
+    "shots_with_crouch": 0,
+    "crouch_fire_long_count": 0,
+    "crouch_presses": 0,
+    "walk_presses": 0,
+    "jump_presses": 0,
+    "ability_presses": 0,
+    "reload_presses": 0,
+    "interact_presses": 0,
+    "scoreboard_presses": 0,
+    "diagonal_entries": 0,
+    "diagonal_seconds": 0.0,
+    "forward_seconds": 0.0,
+    "lateral_seconds": 0.0,
+    "wasd_seconds": 0.0,
+    "shift_seconds": 0.0,
+    "ctrl_seconds": 0.0,
+    "raw_event_count": 6,
+    "lmb_clicks": 3,
+    "possible_crouch_sprays": 0,
+    "jump_window_events": 0,
+    "jump_window_active_seconds": 0.0,
+    "action_counts": {
+      "fire": 3
+    },
+    "average_fire_seconds": 0.078
+  },
+  "raw_events": [
+    {
+      "event_index": 1,
+      "event_type": "mouse_down",
+      "input_id": "mouse_left",
+      "action": "fire",
+      "session_active": true,
+      "session_ref": "2026-06-03 19:49:20",
+      "session_mode": "dm_training",
+      "training_method": "first_shot_hs",
+      "windows_timestamp": "2026-06-03T19:49:23.242",
+      "monotonic_timestamp": 14334.187,
+      "duration_seconds": null,
+      "active_state": {
+        "w": false,
+        "a": false,
+        "s": false,
+        "d": false,
+        "ctrl": false,
+        "shift": false
+      }
+    },
+    {
+      "event_index": 2,
+      "event_type": "mouse_up",
+      "input_id": "mouse_left",
+      "action": "fire",
+      "session_active": true,
+      "session_ref": "2026-06-03 19:49:20",
+      "session_mode": "dm_training",
+      "training_method": "first_shot_hs",
+      "windows_timestamp": "2026-06-03T19:49:23.312",
+      "monotonic_timestamp": 14334.265,
+      "duration_seconds": 0.078,
+      "active_state": {
+        "w": false,
+        "a": false,
+        "s": false,
+        "d": false,
+        "ctrl": false,
+        "shift": false
+      }
+    },
+    {
+      "event_index": 3,
+      "event_type": "mouse_down",
+      "input_id": "mouse_left",
+      "action": "fire",
+      "session_active": true,
+      "session_ref": "2026-06-03 19:49:20",
+      "session_mode": "dm_training",
+      "training_method": "first_shot_hs",
+      "windows_timestamp": "2026-06-03T19:49:24.962",
+      "monotonic_timestamp": 14335.906,
+      "duration_seconds": null,
+      "active_state": {
+        "w": false,
+        "a": false,
+        "s": false,
+        "d": false,
+        "ctrl": false,
+        "shift": false
+      }
+    },
+    {
+      "event_index": 4,
+      "event_type": "mouse_up",
+      "input_id": "mouse_left",
+      "action": "fire",
+      "session_active": true,
+      "session_ref": "2026-06-03 19:49:20",
+      "session_mode": "dm_training",
+      "training_method": "first_shot_hs",
+      "windows_timestamp": "2026-06-03T19:49:25.051",
+      "monotonic_timestamp": 14336.0,
+      "duration_seconds": 0.094,
+      "active_state": {
+        "w": false,
+        "a": false,
+        "s": false,
+        "d": false,
+        "ctrl": false,
+        "shift": false
+      }
+    },
+    {
+      "event_index": 5,
+      "event_type": "mouse_down",
+      "input_id": "mouse_left",
+      "action": "fire",
+      "session_active": true,
+      "session_ref": "2026-06-03 19:49:20",
+      "session_mode": "dm_training",
+      "training_method": "first_shot_hs",
+      "windows_timestamp": "2026-06-03T19:49:26.503",
+      "monotonic_timestamp": 14337.453,
+      "duration_seconds": null,
+      "active_state": {
+        "w": false,
+        "a": false,
+        "s": false,
+        "d": false,
+        "ctrl": false,
+        "shift": false
+      }
+    },
+    {
+      "event_index": 6,
+      "event_type": "mouse_up",
+      "input_id": "mouse_left",
+      "action": "fire",
+      "session_active": true,
+      "session_ref": "2026-06-03 19:49:20",
+      "session_mode": "dm_training",
+      "training_method": "first_shot_hs",
+      "windows_timestamp": "2026-06-03T19:49:26.568",
+      "monotonic_timestamp": 14337.515,
+      "duration_seconds": 0.062,
+      "active_state": {
+        "w": false,
+        "a": false,
+        "s": false,
+        "d": false,
+        "ctrl": false,
+        "shift": false
+      }
+    }
+  ]
+}
