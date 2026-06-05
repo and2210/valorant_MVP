@@ -24,14 +24,24 @@ CONFIG_FILE = DATA_DIR / "config.json"
 
 DEFAULT_WEAPONS = {
     "0": {"name": "Classic", "cost": 0},
-    "1": {"name": "Ghost", "cost": 500},
-    "2": {"name": "Bandit", "cost": 600},
-    "3": {"name": "Sheriff", "cost": 800},
-    "4": {"name": "Bulldog", "cost": 2050},
-    "5": {"name": "Guardian", "cost": 2250},
-    "6": {"name": "Phantom", "cost": 2900},
-    "7": {"name": "Vandal", "cost": 2900},
-    "8": {"name": "Operator", "cost": 4700},
+    "1": {"name": "Shorty", "cost": 300},
+    "2": {"name": "Frenzy", "cost": 450},
+    "3": {"name": "Ghost", "cost": 500},
+    "4": {"name": "Bandit", "cost": 600},
+    "5": {"name": "Sheriff", "cost": 800},
+    "6": {"name": "Stinger", "cost": 1100},
+    "7": {"name": "Spectre", "cost": 1600},
+    "8": {"name": "Bucky", "cost": 850},
+    "9": {"name": "Judge", "cost": 1850},
+    "10": {"name": "Bulldog", "cost": 2050},
+    "11": {"name": "Guardian", "cost": 2250},
+    "12": {"name": "Phantom", "cost": 2900},
+    "13": {"name": "Vandal", "cost": 2900},
+    "14": {"name": "Marshal", "cost": 950},
+    "15": {"name": "Outlaw", "cost": 2400},
+    "16": {"name": "Operator", "cost": 4700},
+    "17": {"name": "Ares", "cost": 1600},
+    "18": {"name": "Odin", "cost": 3200},
 }
 
 MOVEMENT_KEYS = {"w", "a", "s", "d"}
@@ -102,9 +112,13 @@ class AppConfig:
     })
     input_timing: dict[str, Any] = field(default_factory=lambda: {
         "enabled": True,
+        "capture_mode": "performance",
         "tap_max_seconds": 0.12,
         "burst_max_seconds": 0.50,
         "crouch_fire_max_seconds": 0.50,
+        "performance_raw_events_live_max": 1000,
+        "protocol_events_live_max": 300,
+        "debug_lines_max": 100,
         "action_map": {
             "w": "forward",
             "a": "left",
@@ -141,7 +155,7 @@ class AppConfig:
         if not isinstance(weapons, dict) or not weapons:
             weapons = defaults.weapons
 
-        normalized_weapons: dict[str, dict[str, Any]] = {}
+        normalized_weapons: dict[str, dict[str, Any]] = dict(defaults.weapons)
 
         for key, weapon in weapons.items():
             if not isinstance(weapon, dict):
@@ -158,9 +172,6 @@ class AppConfig:
                 cost = 0
 
             normalized_weapons[str(key)] = {"name": name, "cost": max(cost, 0)}
-
-        if not normalized_weapons:
-            normalized_weapons = defaults.weapons
 
         tracker = data.get("tracker", defaults.tracker)
         if not isinstance(tracker, dict):
@@ -233,9 +244,25 @@ class AppConfig:
         normalized_input_timing = dict(defaults.input_timing)
         normalized_input_timing.update(input_timing)
         normalized_input_timing["enabled"] = bool(normalized_input_timing.get("enabled", True))
+        capture_mode = str(normalized_input_timing.get("capture_mode") or "performance").strip().lower()
+        if capture_mode not in {"performance", "full_audit", "off"}:
+            capture_mode = "performance"
+        normalized_input_timing["capture_mode"] = capture_mode
         normalized_input_timing["tap_max_seconds"] = max(_to_float(normalized_input_timing.get("tap_max_seconds"), 0.12), 0.01)
         normalized_input_timing["burst_max_seconds"] = max(_to_float(normalized_input_timing.get("burst_max_seconds"), 0.50), 0.05)
         normalized_input_timing["crouch_fire_max_seconds"] = max(_to_float(normalized_input_timing.get("crouch_fire_max_seconds"), 0.50), 0.05)
+        normalized_input_timing["performance_raw_events_live_max"] = max(
+            _to_int(normalized_input_timing.get("performance_raw_events_live_max"), 1000),
+            50,
+        )
+        normalized_input_timing["protocol_events_live_max"] = max(
+            _to_int(normalized_input_timing.get("protocol_events_live_max"), 300),
+            10,
+        )
+        normalized_input_timing["debug_lines_max"] = max(
+            _to_int(normalized_input_timing.get("debug_lines_max"), 100),
+            10,
+        )
 
         action_map = normalized_input_timing.get("action_map")
         if not isinstance(action_map, dict):

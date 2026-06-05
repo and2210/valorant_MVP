@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
@@ -51,6 +52,7 @@ class FireEvaluationContext:
     has_any_movement_active: bool
     forward_released_recently: bool
     within_jump_window: bool
+    diagonal_recent_entry: bool
     active_state_snapshot: dict[str, bool]
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,6 +72,7 @@ class InputTimingStats:
     jump_presses: int = 0
     jump_window_events: int = 0
     jump_window_active_seconds: float = 0.0
+    jump_strafe_count: int = 0
     fire_taps: int = 0
     fire_bursts: int = 0
     fire_long_sprays: int = 0
@@ -119,23 +122,41 @@ class InputTimingTracker:
     JUMP_ACTIONS = {"jump", "scroll_jump"}
     SCROLL_JUMP_DEBOUNCE_SECONDS = 0.30
     JUMP_WINDOW_SECONDS = 1.50
+    PRE_JUMP_GRACE_SECONDS = 0.15
     RECENT_FORWARD_RELEASE_SECONDS = 0.50
 
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or load_config()
         self.settings = dict(self.config.input_timing)
+        self.capture_mode = self._read_capture_mode()
         self.action_map = self._normalize_action_map(self.settings.get("action_map", {}))
         self.enabled = False
         self.active_state: dict[str, ActiveInputState] = {}
         self.last_release_times: dict[str, float] = {}
         self.intervals: list[InputInterval] = []
-        self.raw_events: list[RawInputEvent] = []
+        self.raw_events: list[RawInputEvent] | deque[RawInputEvent] = []
+        self.raw_events_total = 0
         self.stats = InputTimingStats()
         self.last_state_update = time.monotonic()
         self.diagonal_active = False
+        self.last_diagonal_entry_at = 0.0
         self.jump_window_until = 0.0
         self.last_jump_intent_at = 0.0
         self.jump_window_tracked_keys: set[str] = set()
+        self._reset_raw_event_buffer()
+
+    def _read_capture_mode(self) -> str:
+        mode = str(self.settings.get("capture_mode") or "performance").strip().lower()
+        if mode not in {"performance", "full_audit", "off"}:
+            return "performance"
+        return mode
+
+    def _reset_raw_event_buffer(self) -> None:
+        if self.capture_mode == "performance":
+            live_max = max(int(self.settings.get("performance_raw_events_live_max", 1000)), 50)
+            self.raw_events = deque(maxlen=live_max)
+        else:
+            self.raw_events = []
 
     @staticmethod
     def _normalize_action_map(raw_map: dict[str, Any]) -> dict[str, str]:
@@ -209,8 +230,11 @@ class InputTimingTracker:
         return InputTimingTracker.normalize_input_id(text)
 
     def start(self) -> None:
+        self.settings = dict(self.config.input_timing)
+        self.capture_mode = self._read_capture_mode()
+        self.action_map = self._normalize_action_map(self.settings.get("action_map", {}))
         self.reset()
-        self.enabled = bool(self.settings.get("enabled", True))
+        self.enabled = bool(self.settings.get("enabled", True)) and self.capture_mode != "off"
         self.last_state_update = time.monotonic()
 
     def stop(self) -> InputTimingStats:
@@ -221,7 +245,7 @@ class InputTimingTracker:
             self._complete_interval(input_id, state.action, state.started_at, now)
 
         self.active_state.clear()
-        self.stats.raw_events_total = len(self.raw_events)
+        self.stats.raw_events_total = int(self.raw_events_total)
         self.stats.raw_events = self.raw_events_to_dicts()
         self.stats.active_state_snapshot = self._active_state_snapshot()
         self.enabled = False
@@ -229,14 +253,18 @@ class InputTimingTracker:
         return self.stats
 
     def reset(self) -> None:
+        self.settings = dict(self.config.input_timing)
+        self.capture_mode = self._read_capture_mode()
         self.active_state = {}
         self.last_release_times = {}
         self.intervals = []
-        self.raw_events = []
+        self._reset_raw_event_buffer()
+        self.raw_events_total = 0
         self.stats = InputTimingStats()
         self.stats.active_state_snapshot = self._active_state_snapshot()
         self.last_state_update = time.monotonic()
         self.diagonal_active = False
+        self.last_diagonal_entry_at = 0.0
         self.jump_window_until = 0.0
         self.last_jump_intent_at = 0.0
         self.jump_window_tracked_keys = set()
@@ -247,8 +275,8 @@ class InputTimingTracker:
 
         now = time.monotonic()
         self._update_continuous_state(now)
-        self.stats.raw_events_total = len(self.raw_events)
-        self.stats.raw_events = self.raw_events_to_dicts()
+        self.stats.raw_events_total = int(self.raw_events_total)
+        self.stats.raw_events = []
         self.stats.active_state_snapshot = self._active_state_snapshot()
         return self.stats
 
@@ -274,13 +302,21 @@ class InputTimingTracker:
         current_time = time.monotonic() if now is None else now
         return current_time <= self.jump_window_until
 
+    def is_jump_related_window_active(self, now: float | None = None) -> bool:
+        current_time = time.monotonic() if now is None else now
+        if self.is_jump_window_active(current_time):
+            return True
+        if self.last_jump_intent_at <= 0:
+            return False
+        return (self.last_jump_intent_at - self.PRE_JUMP_GRACE_SECONDS) <= current_time <= self.jump_window_until
+
     def note_jump_window_movement(self, key_name: str, now: float | None = None) -> bool:
         input_id = self.normalize_input_id(key_name)
         if input_id not in MOVEMENT_KEYS:
             return False
 
         current_time = time.monotonic() if now is None else now
-        if not self.is_jump_window_active(current_time):
+        if not self.is_jump_related_window_active(current_time):
             return False
         if input_id in self.jump_window_tracked_keys:
             return False
@@ -299,7 +335,8 @@ class InputTimingTracker:
             has_diagonal_active=has_forward and has_lateral,
             has_any_movement_active=has_forward or has_lateral,
             forward_released_recently=self._had_recent_forward_release(current_time),
-            within_jump_window=self.is_jump_window_active(current_time),
+            within_jump_window=self.is_jump_related_window_active(current_time),
+            diagonal_recent_entry=self.last_diagonal_entry_at > 0 and (current_time - self.last_diagonal_entry_at) <= self.PRE_JUMP_GRACE_SECONDS,
             active_state_snapshot=self._active_state_snapshot(),
         )
 
@@ -433,7 +470,11 @@ class InputTimingTracker:
 
         currently_diagonal = has_forward and has_lateral
         if currently_diagonal and not self.diagonal_active:
-            self.stats.diagonal_entries += 1
+            self.last_diagonal_entry_at = now
+            if self.is_jump_related_window_active(now):
+                self.stats.jump_strafe_count += 1
+            else:
+                self.stats.diagonal_entries += 1
         self.diagonal_active = currently_diagonal
         self.last_state_update = now
 
@@ -479,8 +520,9 @@ class InputTimingTracker:
         monotonic_timestamp: float,
         duration_seconds: float | None = None,
     ) -> None:
+        self.raw_events_total += 1
         event = RawInputEvent(
-            event_index=len(self.raw_events) + 1,
+            event_index=self.raw_events_total,
             event_type=event_type,
             input_id=input_id,
             action=action,
@@ -490,7 +532,7 @@ class InputTimingTracker:
             active_state=self._active_state_snapshot(),
         )
         self.raw_events.append(event)
-        self.stats.raw_events_total = len(self.raw_events)
+        self.stats.raw_events_total = int(self.raw_events_total)
         self.stats.active_state_snapshot = dict(event.active_state)
 
     def _complete_interval(self, input_id: str, action: str, started_at: float, finished_at: float) -> None:

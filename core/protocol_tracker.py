@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
@@ -60,6 +61,7 @@ class ProtocolStats:
     click_while_moving_errors: int = 0
     diagonal_fire_errors: int = 0
     ws_fire_errors: int = 0
+    jump_strafe_count: int = 0
     protocol_events_total: int = 0
     protocol_events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -93,17 +95,40 @@ class ProtocolTracker:
         self.last_diagonal_exit_at = 0.0
         self.diagonal_state_active = False
         self.strict_diagonal_fault_active = False
+        self.last_strict_diagonal_event: dict[str, Any] | None = None
+        self.capture_mode = self._read_capture_mode()
+        self._protocol_events_live: list[dict[str, Any]] | deque[dict[str, Any]] = []
+        self._reset_protocol_event_buffer()
 
     @property
     def shot_linked_window_seconds(self) -> float:
         protocol_settings = dict(self.config.protocol or {})
         return max(float(protocol_settings.get("shot_linked_window_seconds", 0.50)), 0.05)
 
+    def _read_capture_mode(self) -> str:
+        input_settings = dict(self.config.input_timing or {})
+        mode = str(input_settings.get("capture_mode") or "performance").strip().lower()
+        if mode not in {"performance", "full_audit", "off"}:
+            return "performance"
+        return mode
+
+    def _reset_protocol_event_buffer(self) -> None:
+        if self.capture_mode == "performance":
+            input_settings = dict(self.config.input_timing or {})
+            live_max = max(int(input_settings.get("protocol_events_live_max", 300)), 10)
+            self._protocol_events_live = deque(maxlen=live_max)
+        else:
+            self._protocol_events_live = []
+
     def recent_protocol_events(self, limit: int | None = None) -> list[dict[str, Any]]:
         protocol_settings = dict(self.config.protocol or {})
         event_limit = limit or int(protocol_settings.get("debug_event_limit", 12))
         event_limit = max(int(event_limit), 1)
-        return self.stats.protocol_events[-event_limit:]
+        events = list(self._protocol_events_live)
+        return events[-event_limit:]
+
+    def export_protocol_events(self) -> list[dict[str, Any]]:
+        return list(self._protocol_events_live)
 
     def set_session_mode(self, session_mode: str) -> None:
         normalized = str(session_mode or "deathmatch").strip().lower()
@@ -111,15 +136,19 @@ class ProtocolTracker:
         self.current_diagonal_rule_mode = self._resolve_diagonal_rule_mode(self.current_session_mode)
 
     def reset_counters(self) -> None:
+        self.capture_mode = self._read_capture_mode()
         self.stats = ProtocolStats()
         self.cooldown_until = 0.0
         self.last_diagonal_exit_at = 0.0
         self.diagonal_state_active = False
         self.strict_diagonal_fault_active = False
+        self.last_strict_diagonal_event = None
+        self._reset_protocol_event_buffer()
 
     def start(self, session_mode: str | None = None) -> None:
         if session_mode is not None:
             self.set_session_mode(session_mode)
+        self.capture_mode = self._read_capture_mode()
         self.reset_counters()
         self.enabled = True
 
@@ -159,6 +188,26 @@ class ProtocolTracker:
             self.strict_diagonal_fault_active = False
 
         self.diagonal_state_active = diagonal_active
+
+    def on_jump_intent(self, context: FireEvaluationContext) -> None:
+        if not self.enabled:
+            return
+        if not context.has_diagonal_active:
+            return
+        if not context.diagonal_recent_entry:
+            return
+        if self.strict_diagonal_fault_active and self.last_strict_diagonal_event is not None:
+            if self.stats.diagonal_errors > 0:
+                self.stats.diagonal_errors -= 1
+            self._reclassify_event_as_jump_strafe(
+                self.last_strict_diagonal_event,
+                context,
+                time.monotonic(),
+                "Diagonal movement was reclassified as jump strafe after jump intent was detected.",
+            )
+            self.strict_diagonal_fault_active = False
+            self.last_strict_diagonal_event = None
+            self.stats.jump_strafe_count += 1
 
     def on_left_click(self, context: FireEvaluationContext) -> None:
         if not self.enabled:
@@ -294,6 +343,20 @@ class ProtocolTracker:
 
     def _handle_diagonal_entry(self, context: FireEvaluationContext, current_time: float) -> None:
         if context.within_jump_window:
+            self.stats.jump_strafe_count += 1
+            self._record_protocol_event(
+                event_type="jump_strafe",
+                rule_name=RULE_JUMP_WINDOW,
+                rule_mode=STANDARD_RULE_MODE,
+                severity="info",
+                penalized=False,
+                coins_delta=0,
+                reason="Diagonal movement occurred inside the jump window and was classified as jump strafe.",
+                triggered_by="movement",
+                monotonic_timestamp=current_time,
+                input_snapshot=context.active_state_snapshot,
+                context=context.to_dict(),
+            )
             return
 
         if self.current_diagonal_rule_mode == "disabled":
@@ -302,7 +365,7 @@ class ProtocolTracker:
         if self.current_diagonal_rule_mode == "strict_footwork":
             self.stats.diagonal_errors += 1
             self.strict_diagonal_fault_active = True
-            self._record_protocol_event(
+            self.last_strict_diagonal_event = self._record_protocol_event(
                 event_type="diagonal_movement_fault",
                 rule_name=RULE_DIAGONAL_FOOTWORK,
                 rule_mode=self.current_diagonal_rule_mode,
@@ -396,7 +459,7 @@ class ProtocolTracker:
         monotonic_timestamp: float,
         input_snapshot: dict[str, bool],
         context: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, Any]:
         event = ProtocolEvent(
             event_index=self.stats.protocol_events_total + 1,
             event_type=event_type,
@@ -413,4 +476,27 @@ class ProtocolTracker:
             context=context,
         )
         self.stats.protocol_events_total += 1
-        self.stats.protocol_events.append(event.to_dict())
+        event_dict = event.to_dict()
+        self._protocol_events_live.append(event_dict)
+        return event_dict
+
+    def _reclassify_event_as_jump_strafe(
+        self,
+        event: dict[str, Any],
+        context: FireEvaluationContext,
+        monotonic_timestamp: float,
+        reason: str,
+    ) -> None:
+        event.update({
+            "event_type": "jump_strafe",
+            "rule_name": RULE_JUMP_WINDOW,
+            "rule_mode": STANDARD_RULE_MODE,
+            "severity": "info",
+            "penalized": False,
+            "coins_delta": 0,
+            "reason": reason,
+            "triggered_by": "movement",
+            "monotonic_timestamp": round(monotonic_timestamp, 6),
+            "input_snapshot": dict(context.active_state_snapshot or {}),
+            "context": context.to_dict(),
+        })

@@ -6,12 +6,20 @@ from pathlib import Path
 from typing import Any
 
 from core.config import DEFAULT_NEXT_WEAPON, INVENTORY_FILE, WALLET_FILE, load_config
+from core.kcred_engine import buy_weapon as buy_weapon_with_kcred
 from core.kcred_engine import can_buy_weapon
 from core.models import DATETIME_FORMAT
+from core.persistence import load_wallet, save_wallet
 from core.sqlite_store import load_inventory_from_db, save_inventory_to_db
 
 
 DEFAULT_OWNED_WEAPONS = [DEFAULT_NEXT_WEAPON]
+WEAPON_GROUPS: dict[str, list[str]] = {
+    "Sidearms": ["Classic", "Shorty", "Frenzy", "Ghost", "Sheriff", "Bandit"],
+    "SMGs / Shotguns": ["Stinger", "Spectre", "Bucky", "Judge"],
+    "Rifles": ["Bulldog", "Guardian", "Phantom", "Vandal"],
+    "Snipers / Heavies": ["Marshal", "Outlaw", "Operator", "Ares", "Odin"],
+}
 
 
 def _ensure_data_dir() -> None:
@@ -220,6 +228,7 @@ def get_weapon_by_name(name: str) -> dict[str, Any] | None:
 def list_weapons_with_status(wallet: dict[str, Any]) -> list[dict[str, Any]]:
     inventory = load_inventory()
     owned_weapons = set(inventory.get("owned_weapons", []))
+    owned_counts = build_owned_weapon_counts(inventory)
     next_weapon = inventory.get("next_weapon", get_default_weapon_name())
     items = []
 
@@ -230,10 +239,93 @@ def list_weapons_with_status(wallet: dict[str, Any]) -> list[dict[str, Any]]:
             "cost": weapon["cost"],
             "available": can_buy_weapon(wallet, weapon),
             "owned": weapon["name"] in owned_weapons,
+            "owned_quantity": int(owned_counts.get(weapon["name"], 0)),
             "selected_next": weapon["name"] == next_weapon,
+            "group": get_weapon_group_name(weapon["name"]),
         })
 
     return items
+
+
+def get_weapon_group_name(weapon_name: str) -> str:
+    for group_name, names in WEAPON_GROUPS.items():
+        if weapon_name in names:
+            return group_name
+    return "Other"
+
+
+def build_owned_weapon_counts(inventory: dict[str, Any] | None = None) -> dict[str, int]:
+    inventory = normalize_inventory(inventory or load_inventory())
+    counts: dict[str, int] = {}
+
+    for weapon_name in inventory.get("owned_weapons", []):
+        if get_weapon_by_name(weapon_name) is not None:
+            counts[weapon_name] = max(int(counts.get(weapon_name, 0)), 1)
+
+    for item in inventory.get("purchase_history", []):
+        if not isinstance(item, dict):
+            continue
+        weapon_name = str(item.get("weapon") or "").strip()
+        if get_weapon_by_name(weapon_name) is None:
+            continue
+        counts[weapon_name] = int(counts.get(weapon_name, 0)) + 1
+
+    return counts
+
+
+def purchase_weapons_batch(selection_counts: dict[str, int]) -> dict[str, Any]:
+    wallet = load_wallet()
+    inventory = load_inventory()
+    normalized_selection: list[tuple[dict[str, Any], int]] = []
+    total_cost = 0
+
+    for weapon_name, raw_quantity in selection_counts.items():
+        quantity = max(int(raw_quantity), 0)
+        if quantity <= 0:
+            continue
+        weapon = get_weapon_by_name(weapon_name)
+        if weapon is None:
+            raise ValueError(f"Invalid weapon: {weapon_name}")
+        normalized_selection.append((weapon, quantity))
+        total_cost += int(weapon.get("cost", 0)) * quantity
+
+    if not normalized_selection:
+        raise ValueError("Select at least one weapon to buy.")
+
+    if total_cost > int(wallet.get("balance", 0)):
+        raise ValueError("Not enough Coins to buy the current cart.")
+
+    purchase_history = inventory.setdefault("purchase_history", [])
+    owned_weapons = inventory.setdefault("owned_weapons", [])
+    last_weapon_name = inventory.get("next_weapon", get_default_weapon_name())
+
+    for weapon, quantity in normalized_selection:
+        for _ in range(quantity):
+            wallet = buy_weapon_with_kcred(wallet, weapon)
+            weapon_name = str(weapon["name"])
+            if weapon_name not in owned_weapons:
+                owned_weapons.append(weapon_name)
+            purchase_history.append({
+                "datetime": datetime.now().strftime(DATETIME_FORMAT),
+                "session_id": 0,
+                "weapon": weapon_name,
+                "cost": int(weapon.get("cost", 0)),
+                "balance_after_purchase": int(wallet.get("balance", 0)),
+                "source": "inventory_buy_all",
+            })
+            last_weapon_name = weapon_name
+
+    inventory["next_weapon"] = last_weapon_name
+    wallet["next_weapon"] = last_weapon_name
+    save_wallet(wallet)
+    save_inventory(inventory)
+    return {
+        "wallet": wallet,
+        "inventory": inventory,
+        "total_cost": total_cost,
+        "selection_counts": {weapon["name"]: quantity for weapon, quantity in normalized_selection},
+        "next_weapon": last_weapon_name,
+    }
 
 
 def build_inventory_summary() -> dict[str, Any]:

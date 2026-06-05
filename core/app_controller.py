@@ -5,7 +5,7 @@ from typing import Any
 
 from core.dashboard import DashboardStats, build_dashboard_stats
 from core.input_timing import InputTimingStats, InputTimingTracker
-from core.inventory import get_weapon_by_name, list_weapons_with_status
+from core.inventory import get_weapon_by_name, list_weapons_with_status, purchase_weapons_batch
 from core.kcred_engine import calculate_session_kcreds
 from core.models import DMResult
 from core.persistence import load_wallet
@@ -76,9 +76,20 @@ class AppController:
     def live_protocol_events(self) -> list[dict[str, Any]]:
         return list(self.tracker.recent_protocol_events())
 
+    def get_live_protocol_events(self, limit: int | None = None) -> list[dict[str, Any]]:
+        return list(self.tracker.recent_protocol_events(limit))
+
     @property
     def current_diagonal_rule_mode(self) -> str:
         return self.tracker.current_diagonal_rule_mode
+
+    @property
+    def capture_mode(self) -> str:
+        return str(getattr(self.input_timing, "capture_mode", "performance") or "performance")
+
+    @property
+    def is_capture_processing_enabled(self) -> bool:
+        return bool(self.input_timing.enabled)
 
     @property
     def runtime_revision(self) -> int:
@@ -93,6 +104,10 @@ class AppController:
     @property
     def last_finished_session(self) -> DMResult | None:
         return self.session_manager.last_finished_session
+
+    @property
+    def current_session_config_snapshot(self) -> dict[str, Any]:
+        return dict(self.session_manager.current_session_config_snapshot or {})
 
     def sync_state(self) -> AppState:
         self.state.is_session_active = self.is_session_active
@@ -112,32 +127,38 @@ class AppController:
     # ------------------------------------------------------------------
 
     def handle_key_press(self, key_name: str) -> None:
+        if not self.is_capture_processing_enabled:
+            return
         self.input_timing.on_key_press(key_name)
         self.tracker.on_input_state_changed(self.input_timing.build_fire_context())
-        self.sync_state()
 
     def handle_key_release(self, key_name: str) -> None:
+        if not self.is_capture_processing_enabled:
+            return
         self.input_timing.on_key_release(key_name)
         self.tracker.on_input_state_changed(self.input_timing.build_fire_context())
-        self.sync_state()
 
     def handle_mouse_button(self, button_name: str, pressed: bool) -> None:
+        if not self.is_capture_processing_enabled:
+            return
         self.input_timing.on_mouse_button(button_name, pressed)
 
         if button_name == "mouse_left" and pressed:
             self.tracker.on_left_click(self.input_timing.build_fire_context())
 
-        self.sync_state()
-
     def handle_mouse_scroll(self, direction: str) -> None:
+        if not self.is_capture_processing_enabled:
+            return
         self.input_timing.on_scroll(direction)
-        self.sync_state()
+        if direction == "scroll_up":
+            self.tracker.on_jump_intent(self.input_timing.build_fire_context())
 
     def handle_left_click(self) -> None:
         # Compatibilidade com chamadas antigas. Para medir duração de tiro,
         # prefira handle_mouse_button("mouse_left", pressed).
+        if not self.is_capture_processing_enabled:
+            return
         self.tracker.on_left_click(self.input_timing.build_fire_context())
-        self.sync_state()
 
     # ------------------------------------------------------------------
     # Sessão
@@ -233,6 +254,12 @@ class AppController:
 
     def confirm_purchase(self, weapon: dict[str, Any]) -> DMResult:
         return self.confirm_purchase_by_name(str(weapon.get("name", "")))
+
+    def buy_inventory_cart(self, selection_counts: dict[str, int]) -> dict[str, Any]:
+        summary = purchase_weapons_batch(selection_counts)
+        self.invalidate_cached_resources()
+        self.sync_state()
+        return summary
 
     # ------------------------------------------------------------------
     # Consultas para UI

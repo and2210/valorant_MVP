@@ -29,6 +29,8 @@ class SessionManager:
         self.current_session_start_source = "manual"
         self.session_started_at: datetime | None = None
         self.last_finished_session: DMResult | None = None
+        self.current_session_config_snapshot: dict[str, object] = {}
+        self.last_session_config_snapshot: dict[str, object] = {}
 
     @staticmethod
     def format_datetime(value: datetime) -> str:
@@ -46,6 +48,7 @@ class SessionManager:
         self.current_session_start_source = str(start_source or "manual")
         self.current_session_weapon = get_next_weapon()
         self.session_started_at = datetime.now()
+        self.current_session_config_snapshot = self.build_session_config_snapshot()
         if self.current_session_mode == "deathmatch":
             register_weapon_usage(self.current_session_weapon)
         self.tracker.start(self.current_session_mode)
@@ -66,19 +69,26 @@ class SessionManager:
 
         self.tracker.stop()
         input_stats = self.input_timing.stop()
-        protocol_events = list(stats.protocol_events)
+        protocol_events = self.tracker.export_protocol_events()
+        capture_mode = str(getattr(self.input_timing, "capture_mode", "performance") or "performance")
         protocol_summary = {
             "session_mode": self.current_session_mode,
             "start_source": self.current_session_start_source,
+            "capture_mode": capture_mode,
             "diagonal_rule_mode": self.tracker.current_diagonal_rule_mode,
             "protocol_events_total": stats.protocol_events_total,
             "protocol_events": protocol_events,
             "clean_hits": stats.clean_hits,
             "brake_errors": stats.brake_errors,
             "diagonal_errors": stats.diagonal_errors,
+            "diagonal_faults": stats.diagonal_errors,
+            "diagonal_fire_errors": stats.diagonal_fire_errors,
+            "jump_strafe_count": stats.jump_strafe_count,
+            "jump_window_events": int(input_stats.jump_window_events),
             "ignored_clicks": stats.ignored_clicks,
             "valid_attempts": stats.valid_attempts,
             "protocol_rate": round(stats.protocol_rate, 1),
+            "session_config_snapshot": dict(self.current_session_config_snapshot),
         }
         balance_before = int(wallet.get("balance", 0))
 
@@ -104,6 +114,7 @@ class SessionManager:
         )
 
         self.last_finished_session = result
+        self.last_session_config_snapshot = dict(self.current_session_config_snapshot)
         self.session_started_at = None
         if self.current_session_mode == "deathmatch":
             save_wallet(wallet)
@@ -137,8 +148,10 @@ class SessionManager:
             if key not in {"raw_events", "raw_events_total"}
         }
         useful_inputs["session_mode"] = self.current_session_mode
+        useful_inputs["capture_mode"] = str(getattr(self.input_timing, "capture_mode", "performance") or "performance")
         useful_inputs["protocol_rule_mode"] = str((protocol_summary or {}).get("diagonal_rule_mode") or "")
         useful_inputs["raw_events_total"] = int(input_data.get("raw_events_total", len(raw_events)))
+        useful_inputs["jump_strafe_count"] = int(input_data.get("jump_strafe_count", 0))
 
         economy_summary = {
             "session_mode": self.current_session_mode,
@@ -150,16 +163,20 @@ class SessionManager:
         }
         debug_summary = {
             "start_source": self.current_session_start_source,
+            "capture_mode": str(getattr(self.input_timing, "capture_mode", "performance") or "performance"),
             "weapon_used": self.current_session_weapon,
             "raw_events_total": int(input_data.get("raw_events_total", len(raw_events))),
             "protocol_events_total": int((protocol_summary or {}).get("protocol_events_total", 0)),
             "current_diagonal_rule_mode": str((protocol_summary or {}).get("diagonal_rule_mode") or ""),
-            "audit_version": "v0.21.7",
+            "raw_events_compact": str(getattr(self.input_timing, "capture_mode", "performance") or "performance") == "performance",
+            "audit_version": "v0.21.11",
         }
         input_payload = {
+            "capture_mode": str(getattr(self.input_timing, "capture_mode", "performance") or "performance"),
             "raw_events": raw_events,
             "useful_inputs": useful_inputs,
             "protocol_events": protocol_events,
+            "session_config_snapshot": dict(self.current_session_config_snapshot),
             "protocol_summary": {
                 key: value
                 for key, value in dict(protocol_summary or {}).items()
@@ -223,6 +240,7 @@ class SessionManager:
         payload = {
             "session_id": result.session_id,
             "session_mode": result.session_mode,
+            "capture_mode": str(getattr(self.input_timing, "capture_mode", "performance") or "performance"),
             "started_at": result.started_at,
             "finished_at": result.finished_at,
             "duration_seconds": result.duration_seconds,
@@ -230,6 +248,7 @@ class SessionManager:
             "raw_events": raw_events,
             "useful_inputs": useful_inputs,
             "protocol_events": protocol_events,
+            "session_config_snapshot": dict(self.current_session_config_snapshot),
             "protocol_summary": {
                 key: value
                 for key, value in protocol_summary.items()
@@ -245,11 +264,13 @@ class SessionManager:
             },
             "debug_summary": {
                 "start_source": self.current_session_start_source,
+                "capture_mode": str(getattr(self.input_timing, "capture_mode", "performance") or "performance"),
                 "weapon_used": result.weapon_used,
-                "raw_events_total": len(raw_events),
-                "protocol_events_total": len(protocol_events),
+                "raw_events_total": int(useful_inputs.get("raw_events_total", len(raw_events))),
+                "protocol_events_total": int((protocol_summary or {}).get("protocol_events_total", len(protocol_events))),
                 "current_diagonal_rule_mode": self.tracker.current_diagonal_rule_mode,
-                "audit_version": "v0.21.7",
+                "raw_events_compact": str(getattr(self.input_timing, "capture_mode", "performance") or "performance") == "performance",
+                "audit_version": "v0.21.11",
             },
         }
 
@@ -257,6 +278,31 @@ class SessionManager:
             json.dump(payload, file, ensure_ascii=False, indent=2)
 
         return audit_path
+
+    def build_session_config_snapshot(self) -> dict[str, object]:
+        config = self.tracker.config
+        input_settings = dict(config.input_timing or {})
+        protocol_settings = dict(config.protocol or {})
+        automation_settings = dict(config.session_automation or {})
+        return {
+            "capture_mode": str(getattr(self.input_timing, "capture_mode", "performance") or "performance"),
+            "diagonal_rule_mode": self.tracker.current_diagonal_rule_mode,
+            "jump_window_ms": int(round(self.input_timing.JUMP_WINDOW_SECONDS * 1000)),
+            "jump_pre_grace_ms": int(round(getattr(self.input_timing, "PRE_JUMP_GRACE_SECONDS", 0.15) * 1000)),
+            "ws_recent_window_ms": int(round(self.input_timing.RECENT_FORWARD_RELEASE_SECONDS * 1000)),
+            "tap_threshold_ms": int(round(float(input_settings.get("tap_max_seconds", 0.12)) * 1000)),
+            "burst_threshold_ms": int(round(float(input_settings.get("burst_max_seconds", 0.50)) * 1000)),
+            "spray_threshold_ms": int(round(float(input_settings.get("burst_max_seconds", 0.50)) * 1000)),
+            "crouch_fire_threshold_ms": int(round(float(input_settings.get("crouch_fire_max_seconds", 0.50)) * 1000)),
+            "episode_timeout_ms": int(round(float(config.episode_timeout) * 1000)),
+            "post_click_cooldown_ms": int(round(float(config.post_click_cooldown) * 1000)),
+            "stationary_click_counts_clean": bool(config.stationary_click_counts_clean),
+            "stationary_min_release_ms": int(round(float(config.stationary_min_release_seconds) * 1000)),
+            "require_release_at_click": bool(config.require_release_at_click),
+            "auto_arm_enabled": bool(automation_settings.get("auto_arm_enabled", False)),
+            "capture_enabled": bool(input_settings.get("enabled", True)),
+            "shot_linked_window_ms": int(round(float(protocol_settings.get("shot_linked_window_seconds", 0.50)) * 1000)),
+        }
 
     def finish_purchase_and_save(self, weapon: dict) -> DMResult | None:
         if self.last_finished_session is None:

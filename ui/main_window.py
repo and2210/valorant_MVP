@@ -3,6 +3,8 @@ from __future__ import annotations
 import calendar
 import ctypes
 import os
+import sys
+from collections import Counter
 from datetime import date
 
 from pynput import keyboard, mouse
@@ -37,7 +39,7 @@ from PySide6.QtWidgets import (
 
 from core.app_controller import AppController
 from core.input_timing import InputTimingTracker
-from core.config import DATA_DIR, AppConfig, load_config, save_config
+from core.config import CONFIG_FILE, DATA_DIR, PROJECT_ROOT, AppConfig, load_config, save_config
 from core.dashboard import DashboardStats
 from core.persistence import load_all_sessions
 from core.protocol_tracker import DIAGONAL_RULE_LABELS
@@ -48,6 +50,8 @@ from core.tracker_importer import (
     load_tracker_dm_matches,
     load_tracker_ranked_matches,
 )
+from ui.screens.history_screen import HistoryScreen
+from ui.screens.inventory_screen import InventoryScreen
 
 
 class GuiSignals(QObject):
@@ -59,6 +63,8 @@ class GuiSignals(QObject):
 
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
+    ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
+    APP_VERSION = "v0.21.11"
 
     def __init__(self) -> None:
         super().__init__()
@@ -77,6 +83,7 @@ class MainWindow(QWidget):
 
         self._build_ui()
         self._connect_signals()
+        self.load_settings_into_form(self.app_config)
         self._start_input_listeners()
 
         self.live_timer = QTimer(self)
@@ -185,27 +192,97 @@ class MainWindow(QWidget):
         )
 
     def _build_inventory_shell(self) -> QWidget:
-        return self._build_section_shell(
-            "Inventory",
-            [
-                ("Coins", self._build_coins_page()),
-                ("Weapons", self._build_weapons_page()),
-                ("Progression", self._build_progression_page()),
-            ],
-            "inventory",
-        )
+        self.inventory_screen = InventoryScreen()
+        self._bind_inventory_screen_widgets(self.inventory_screen)
+        return self.inventory_screen
 
     def _build_history_shell(self) -> QWidget:
-        return self._build_section_shell(
-            "History",
-            [
-                ("Calendar", self._build_calendar_tab()),
-                ("Map Tracking", self._build_tracker_tab()),
-                ("Training Sessions", self._build_training_sessions_page()),
-                ("Ranked Matches", self._build_radiante_tab()),
-            ],
-            "history",
-        )
+        self.history_screen = HistoryScreen()
+        self._bind_history_screen_widgets(self.history_screen)
+        return self.history_screen
+
+    def _bind_inventory_screen_widgets(self, screen: InventoryScreen) -> None:
+        self.inventory_stack = screen.inventory_stack
+        self.inventory_buttons = screen.inventory_buttons
+        self.balance_label = screen.balance_label
+        self.today_label = screen.today_label
+        self.coins_equipped_label = screen.coins_equipped_label
+        self.coins_next_step_label = screen.coins_next_step_label
+        self.inventory_hint_label = screen.inventory_hint_label
+        self.weapons_equipped_label = screen.weapons_equipped_label
+        self.available_weapons_label = screen.available_weapons_label
+        self.weapon_combo = screen.weapon_combo
+        self.weapon_button_widgets = screen.weapon_button_widgets
+        self.weapon_owned_labels = screen.weapon_owned_labels
+        self.weapon_selected_labels = screen.weapon_selected_labels
+        self.weapon_cost_labels = screen.weapon_cost_labels
+        self.weapon_group_boxes = screen.weapon_group_boxes
+        self.cart_summary_label = screen.cart_summary_label
+        self.cart_total_label = screen.cart_total_label
+        self.cart_balance_label = screen.cart_balance_label
+        self.confirm_purchase_button = screen.confirm_purchase_button
+        self.clear_selection_button = screen.clear_selection_button
+        self.purchase_status_label = screen.purchase_status_label
+        self.weapons_empty_label = screen.weapons_empty_label
+        self.level_label = screen.level_label
+        self.xp_label = screen.xp_label
+        self.xp_bar = screen.xp_bar
+        self.next_weapon_label = screen.next_weapon_label
+        self.total_sessions_label = screen.total_sessions_label
+        self.avg_rate_label = screen.avg_rate_label
+        self.best_weapon_label = screen.best_weapon_label
+
+    def _bind_history_screen_widgets(self, screen: HistoryScreen) -> None:
+        self.history_stack = screen.history_stack
+        self.history_buttons = screen.history_buttons
+        self.prev_month_button = screen.prev_month_button
+        self.calendar_month_label = screen.calendar_month_label
+        self.today_month_button = screen.today_month_button
+        self.next_month_button = screen.next_month_button
+        self.calendar_go_tracker_button = screen.calendar_go_tracker_button
+        self.calendar_go_training_button = screen.calendar_go_training_button
+        self.calendar_go_ranked_button = screen.calendar_go_ranked_button
+        self.calendar_month_summary_label = screen.calendar_month_summary_label
+        self.calendar_goal_label = screen.calendar_goal_label
+        self.training_calendar_table = screen.training_calendar_table
+        self.calendar_legend_label = screen.calendar_legend_label
+        self.import_tracker_button = screen.import_tracker_button
+        self.import_all_tracker_checkbox = screen.import_all_tracker_checkbox
+        self.import_day_button = screen.import_day_button
+        self.import_range_button = screen.import_range_button
+        self.import_from_date = screen.import_from_date
+        self.import_to_date = screen.import_to_date
+        self.tracker_total_label = screen.tracker_total_label
+        self.tracker_kd_label = screen.tracker_kd_label
+        self.tracker_best_map_label = screen.tracker_best_map_label
+        self.tracker_best_agent_label = screen.tracker_best_agent_label
+        self.tracker_best_match_label = screen.tracker_best_match_label
+        self.tracker_last_match_label = screen.tracker_last_match_label
+        self.tracker_status_label = screen.tracker_status_label
+        self.tracker_table = screen.tracker_table
+        self.training_sessions_summary_label = screen.training_sessions_summary_label
+        self.training_sessions_status_label = screen.training_sessions_status_label
+        self.training_sessions_table = screen.training_sessions_table
+        self.import_ranked_button = screen.import_ranked_button
+        self.import_all_ranked_checkbox = screen.import_all_ranked_checkbox
+        self.import_ranked_day_button = screen.import_ranked_day_button
+        self.import_ranked_range_button = screen.import_ranked_range_button
+        self.ranked_from_date = screen.ranked_from_date
+        self.ranked_to_date = screen.ranked_to_date
+        self.ranked_total_label = screen.ranked_total_label
+        self.ranked_winrate_label = screen.ranked_winrate_label
+        self.ranked_rr_label = screen.ranked_rr_label
+        self.ranked_acs_label = screen.ranked_acs_label
+        self.ranked_adr_label = screen.ranked_adr_label
+        self.ranked_dd_label = screen.ranked_dd_label
+        self.ranked_fbfd_label = screen.ranked_fbfd_label
+        self.ranked_kast_label = screen.ranked_kast_label
+        self.ranked_signal_label = screen.ranked_signal_label
+        self.ranked_focus_label = screen.ranked_focus_label
+        self.ranked_best_map_label = screen.ranked_best_map_label
+        self.ranked_worst_map_label = screen.ranked_worst_map_label
+        self.ranked_history_status_label = screen.ranked_history_status_label
+        self.ranked_table = screen.ranked_table
 
     def _build_settings_shell(self) -> QWidget:
         page = QWidget()
@@ -252,39 +329,6 @@ class MainWindow(QWidget):
 
         self._set_subpage(self.settings_stack, 0, self.settings_buttons)
         return page
-
-    def _build_progression_group(self) -> QGroupBox:
-        dashboard_group = QGroupBox("Progression")
-        dashboard_layout = QGridLayout(dashboard_group)
-
-        self.level_label = QLabel("Level: -")
-        self.xp_label = QLabel("XP: -")
-        self.xp_bar = QProgressBar()
-        self.xp_bar.setRange(0, 1000)
-        self.xp_bar.setValue(0)
-        self.xp_bar.setTextVisible(True)
-        self.next_weapon_label = QLabel("Next weapon: -")
-        self.total_sessions_label = QLabel("Total sessions: -")
-        self.avg_rate_label = QLabel("Average protocol rate: -")
-        self.best_weapon_label = QLabel("Best weapon: -")
-
-        dashboard_layout.addWidget(self.level_label, 0, 0)
-        dashboard_layout.addWidget(self.xp_label, 0, 1)
-        dashboard_layout.addWidget(self.xp_bar, 1, 0, 1, 2)
-        dashboard_layout.addWidget(self.next_weapon_label, 2, 0)
-        dashboard_layout.addWidget(self.total_sessions_label, 2, 1)
-        dashboard_layout.addWidget(self.avg_rate_label, 3, 0)
-        dashboard_layout.addWidget(self.best_weapon_label, 3, 1)
-        return dashboard_group
-
-    def _build_coins_group(self) -> QGroupBox:
-        group = QGroupBox("Coins")
-        layout = QGridLayout(group)
-        self.balance_label = QLabel("Coins: -")
-        self.today_label = QLabel("Today: -")
-        layout.addWidget(self.balance_label, 0, 0)
-        layout.addWidget(self.today_label, 1, 0)
-        return group
 
     def _build_live_session_group(self) -> QGroupBox:
         live_group = QGroupBox("Current Session")
@@ -340,22 +384,6 @@ class MainWindow(QWidget):
         debug_layout.addWidget(self.audit_path_label)
         return debug_group
 
-    def _build_purchase_group(self) -> QGroupBox:
-        purchase_group = QGroupBox("Weapons")
-        purchase_layout = QHBoxLayout(purchase_group)
-        self.weapon_combo = QComboBox()
-        self.weapon_combo.setMinimumWidth(320)
-        self.weapon_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.weapon_combo.setMinimumContentsLength(28)
-        self.confirm_purchase_button = QPushButton("Confirm Purchase")
-        self.purchase_status_label = QLabel("Finish a Deathmatch session to unlock the next purchase.")
-        self.weapon_combo.setEnabled(False)
-        self.confirm_purchase_button.setEnabled(False)
-        purchase_layout.addWidget(self.weapon_combo, stretch=1)
-        purchase_layout.addWidget(self.confirm_purchase_button)
-        purchase_layout.addWidget(self.purchase_status_label, stretch=2)
-        return purchase_group
-
     def _build_ranked_audit_page(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
@@ -372,40 +400,6 @@ class MainWindow(QWidget):
         root.addStretch(1)
         return page
 
-    def _build_coins_page(self) -> QWidget:
-        page = QWidget()
-        root = QVBoxLayout(page)
-        root.addWidget(self._build_coins_group())
-        root.addStretch(1)
-        return page
-
-    def _build_weapons_page(self) -> QWidget:
-        page = QWidget()
-        root = QVBoxLayout(page)
-        root.addWidget(self._build_purchase_group())
-        root.addStretch(1)
-        return page
-
-    def _build_progression_page(self) -> QWidget:
-        page = QWidget()
-        root = QVBoxLayout(page)
-        root.addWidget(self._build_progression_group())
-        root.addStretch(1)
-        return page
-
-    def _build_training_sessions_page(self) -> QWidget:
-        page = QWidget()
-        root = QVBoxLayout(page)
-        self.training_sessions_summary_label = QLabel("Training sessions: -")
-        root.addWidget(self.training_sessions_summary_label)
-        self.training_sessions_table = QTableWidget(0, 6)
-        self.training_sessions_table.setHorizontalHeaderLabels(
-            ["Date", "Mode", "Weapon", "Rate", "Coins", "Duration"]
-        )
-        self.training_sessions_table.setMinimumHeight(320)
-        root.addWidget(self.training_sessions_table, stretch=1)
-        return page
-
     def _build_keys_input_settings_page(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
@@ -420,6 +414,16 @@ class MainWindow(QWidget):
         root = QVBoxLayout(page)
         root.addWidget(QLabel("Import"))
         root.addWidget(self._build_tracker_settings_group())
+        calendar_group = QGroupBox("Training Calendar")
+        calendar_layout = QHBoxLayout(calendar_group)
+        self.import_training_calendar_button = QPushButton("Import Training Calendar CSV")
+        self.export_training_calendar_button = QPushButton("Export Training Calendar CSV")
+        calendar_note = QLabel("Use CSV tools here. The live History calendar still reflects local session and match data.")
+        calendar_note.setWordWrap(True)
+        calendar_layout.addWidget(self.import_training_calendar_button)
+        calendar_layout.addWidget(self.export_training_calendar_button)
+        calendar_layout.addWidget(calendar_note, stretch=1)
+        root.addWidget(calendar_group)
         note = QLabel("Match import actions stay under History. Import credentials and limits live here.")
         note.setWordWrap(True)
         root.addWidget(note)
@@ -461,13 +465,21 @@ class MainWindow(QWidget):
         input_group = QGroupBox("Input Timing")
         input_form = QFormLayout(input_group)
         self.setting_input_enabled = QCheckBox("Track key, mouse, and scroll duration")
+        self.setting_capture_mode = QComboBox()
+        self.setting_capture_mode.addItem("Performance", "performance")
+        self.setting_capture_mode.addItem("Full Audit", "full_audit")
+        self.setting_capture_mode.addItem("Off", "off")
+        self.setting_capture_mode_warning = QLabel("Performance is recommended while playing. Full Audit may affect performance.")
+        self.setting_capture_mode_warning.setWordWrap(True)
         self.setting_tap_max = self.make_seconds_spin(0.01, 2.00)
         self.setting_burst_max = self.make_seconds_spin(0.05, 5.00)
         self.setting_crouch_fire_max = self.make_seconds_spin(0.05, 5.00)
         input_form.addRow("Input timing:", self.setting_input_enabled)
+        input_form.addRow("Capture Mode:", self.setting_capture_mode)
         input_form.addRow("Tap max:", self.setting_tap_max)
         input_form.addRow("Burst max:", self.setting_burst_max)
         input_form.addRow("Crouch+fire max:", self.setting_crouch_fire_max)
+        input_form.addRow("", self.setting_capture_mode_warning)
         return input_group
 
     def _build_tracker_settings_group(self) -> QGroupBox:
@@ -574,177 +586,6 @@ class MainWindow(QWidget):
         root.addWidget(self._build_live_session_group())
         root.addWidget(self._build_input_summary_group())
         root.addStretch(1)
-        return tab
-
-    def _build_tracker_tab(self) -> QWidget:
-        tab = QWidget()
-        root = QVBoxLayout(tab)
-
-        actions = QHBoxLayout()
-        self.import_tracker_button = QPushButton("Import Deathmatches")
-        self.import_all_tracker_checkbox = QCheckBox("Import all within the limit")
-        self.import_all_tracker_checkbox.setChecked(True)
-        self.import_day_button = QPushButton("Refresh day")
-        self.import_range_button = QPushButton("Refresh range")
-        self.import_from_date = QDateEdit()
-        self.import_from_date.setCalendarPopup(True)
-        self.import_from_date.setDisplayFormat("yyyy-MM-dd")
-        self.import_from_date.setDate(QDate.currentDate())
-        self.import_to_date = QDateEdit()
-        self.import_to_date.setCalendarPopup(True)
-        self.import_to_date.setDisplayFormat("yyyy-MM-dd")
-        self.import_to_date.setDate(QDate.currentDate())
-        actions.addWidget(self.import_tracker_button)
-        actions.addWidget(self.import_all_tracker_checkbox)
-        actions.addWidget(QLabel("From:"))
-        actions.addWidget(self.import_from_date)
-        actions.addWidget(QLabel("To:"))
-        actions.addWidget(self.import_to_date)
-        actions.addWidget(self.import_day_button)
-        actions.addWidget(self.import_range_button)
-        actions.addStretch(1)
-        root.addLayout(actions)
-
-        tracker_group = QGroupBox("Map Tracking")
-        tracker_layout = QGridLayout(tracker_group)
-        self.tracker_total_label = QLabel("Imported DMs: 0")
-        self.tracker_kd_label = QLabel("Average KD: -")
-        self.tracker_best_map_label = QLabel("Best map: -")
-        self.tracker_best_agent_label = QLabel("Best agent: -")
-        self.tracker_best_match_label = QLabel("Best DM: -")
-        self.tracker_last_match_label = QLabel("Latest DM: -")
-
-        tracker_layout.addWidget(self.tracker_total_label, 0, 0)
-        tracker_layout.addWidget(self.tracker_kd_label, 0, 1)
-        tracker_layout.addWidget(self.tracker_best_map_label, 1, 0)
-        tracker_layout.addWidget(self.tracker_best_agent_label, 1, 1)
-        tracker_layout.addWidget(self.tracker_best_match_label, 2, 0)
-        tracker_layout.addWidget(self.tracker_last_match_label, 2, 1)
-        root.addWidget(tracker_group)
-
-        self.tracker_table = QTableWidget(0, 10)
-        self.tracker_table.setHorizontalHeaderLabels([
-            "Date", "Map", "Agent", "K", "D", "A", "KD", "Duration", "Weapon", "Protocol"
-        ])
-        self.tracker_table.setMinimumHeight(260)
-        root.addWidget(self.tracker_table, stretch=1)
-        return tab
-
-    def _build_radiante_tab(self) -> QWidget:
-        tab = QWidget()
-        root = QVBoxLayout(tab)
-
-        actions = QHBoxLayout()
-        self.import_ranked_button = QPushButton("Import Ranked Matches")
-        self.import_all_ranked_checkbox = QCheckBox("Import all within the limit")
-        self.import_all_ranked_checkbox.setChecked(True)
-        self.import_ranked_day_button = QPushButton("Refresh day")
-        self.import_ranked_range_button = QPushButton("Refresh range")
-        self.ranked_from_date = QDateEdit()
-        self.ranked_from_date.setCalendarPopup(True)
-        self.ranked_from_date.setDisplayFormat("yyyy-MM-dd")
-        self.ranked_from_date.setDate(QDate.currentDate())
-        self.ranked_to_date = QDateEdit()
-        self.ranked_to_date.setCalendarPopup(True)
-        self.ranked_to_date.setDisplayFormat("yyyy-MM-dd")
-        self.ranked_to_date.setDate(QDate.currentDate())
-
-        actions.addWidget(self.import_ranked_button)
-        actions.addWidget(self.import_all_ranked_checkbox)
-        actions.addWidget(QLabel("From:"))
-        actions.addWidget(self.ranked_from_date)
-        actions.addWidget(QLabel("To:"))
-        actions.addWidget(self.ranked_to_date)
-        actions.addWidget(self.import_ranked_day_button)
-        actions.addWidget(self.import_ranked_range_button)
-        actions.addStretch(1)
-        root.addLayout(actions)
-
-        summary_group = QGroupBox("Ranked Matches")
-        summary_layout = QGridLayout(summary_group)
-        self.ranked_total_label = QLabel("Ranked matches: 0")
-        self.ranked_winrate_label = QLabel("Winrate: -")
-        self.ranked_rr_label = QLabel("RR: -")
-        self.ranked_acs_label = QLabel("ACS médio: -")
-        self.ranked_adr_label = QLabel("ADR médio: -")
-        self.ranked_dd_label = QLabel("DDΔ: -")
-        self.ranked_fbfd_label = QLabel("FB/FD: -")
-        self.ranked_kast_label = QLabel("KAST: -")
-        self.ranked_signal_label = QLabel("Sinal dominante: -")
-        self.ranked_focus_label = QLabel("Foco recomendado: -")
-        self.ranked_best_map_label = QLabel("Best map: -")
-        self.ranked_worst_map_label = QLabel("Worst map: -")
-
-        summary_layout.addWidget(self.ranked_total_label, 0, 0)
-        summary_layout.addWidget(self.ranked_winrate_label, 0, 1)
-        summary_layout.addWidget(self.ranked_rr_label, 0, 2)
-        summary_layout.addWidget(self.ranked_acs_label, 1, 0)
-        summary_layout.addWidget(self.ranked_adr_label, 1, 1)
-        summary_layout.addWidget(self.ranked_kast_label, 1, 2)
-        summary_layout.addWidget(self.ranked_dd_label, 2, 0)
-        summary_layout.addWidget(self.ranked_fbfd_label, 2, 1)
-        summary_layout.addWidget(self.ranked_best_map_label, 2, 2)
-        summary_layout.addWidget(self.ranked_worst_map_label, 3, 0)
-        summary_layout.addWidget(self.ranked_signal_label, 3, 1, 1, 2)
-        summary_layout.addWidget(self.ranked_focus_label, 4, 0, 1, 3)
-        root.addWidget(summary_group)
-
-        self.ranked_table = QTableWidget(0, 14)
-        self.ranked_table.setHorizontalHeaderLabels([
-            "Date", "Map", "Agent", "Result", "Rank", "RRΔ",
-            "ACS", "ADR", "DDΔ", "DD/R", "FB", "FD", "FB-FD", "K/D/A"
-        ])
-        self.ranked_table.setMinimumHeight(360)
-        root.addWidget(self.ranked_table, stretch=1)
-        return tab
-
-    def _build_calendar_tab(self) -> QWidget:
-        tab = QWidget()
-        root = QVBoxLayout(tab)
-
-        calendar_group = QGroupBox("Training Calendar")
-        calendar_layout = QVBoxLayout(calendar_group)
-
-        calendar_actions = QHBoxLayout()
-        self.prev_month_button = QPushButton("◀ Previous month")
-        self.calendar_month_label = QLabel("-")
-        self.calendar_month_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.today_month_button = QPushButton("Current month")
-        self.next_month_button = QPushButton("Next month ▶")
-        self.export_calendar_button = QPushButton("Export month CSV")
-        calendar_actions.addWidget(self.prev_month_button)
-        calendar_actions.addWidget(self.calendar_month_label, stretch=1)
-        calendar_actions.addWidget(self.today_month_button)
-        calendar_actions.addWidget(self.next_month_button)
-        calendar_actions.addWidget(self.export_calendar_button)
-        calendar_layout.addLayout(calendar_actions)
-
-        self.calendar_month_summary_label = QLabel("Month summary: -")
-        self.calendar_goal_label = QLabel("Daily goal: -")
-        calendar_layout.addWidget(self.calendar_month_summary_label)
-        calendar_layout.addWidget(self.calendar_goal_label)
-
-        self.training_calendar_table = QTableWidget(6, 7)
-        self.training_calendar_table.setHorizontalHeaderLabels([
-            "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"
-        ])
-        self.training_calendar_table.setVerticalHeaderLabels(["1", "2", "3", "4", "5", "6"])
-        self.training_calendar_table.setMinimumHeight(260)
-        self.training_calendar_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.training_calendar_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.training_calendar_table.setWordWrap(True)
-        calendar_layout.addWidget(self.training_calendar_table)
-
-        self.calendar_legend_label = QLabel(self.get_calendar_legend_text())
-        calendar_layout.addWidget(self.calendar_legend_label)
-
-        self.training_days_summary_table = QTableWidget(0, 7)
-        self.training_days_summary_table.setHorizontalHeaderLabels([
-            "Date", "DMs", "Time", "Hours", "Average KD", "Linked Sessions", "Weapons"
-        ])
-        self.training_days_summary_table.setMinimumHeight(130)
-        calendar_layout.addWidget(self.training_days_summary_table)
-        root.addWidget(calendar_group, stretch=1)
         return tab
 
     def _build_settings_tab(self) -> QWidget:
@@ -884,11 +725,16 @@ class MainWindow(QWidget):
         self.prev_month_button.clicked.connect(self.show_previous_month)
         self.today_month_button.clicked.connect(self.show_current_month)
         self.next_month_button.clicked.connect(self.show_next_month)
-        self.export_calendar_button.clicked.connect(self.export_current_month_calendar)
+        self.calendar_go_tracker_button.clicked.connect(lambda: self._set_subpage(self.history_stack, 1, self.history_buttons))
+        self.calendar_go_training_button.clicked.connect(lambda: self._set_subpage(self.history_stack, 2, self.history_buttons))
+        self.calendar_go_ranked_button.clicked.connect(lambda: self._set_subpage(self.history_stack, 3, self.history_buttons))
+        self.import_training_calendar_button.clicked.connect(self.import_training_calendar_csv)
+        self.export_training_calendar_button.clicked.connect(self.export_current_month_calendar)
         self.save_settings_button.clicked.connect(self.save_quick_settings)
         self.reload_settings_button.clicked.connect(self.reload_quick_settings)
         self.reset_settings_button.clicked.connect(self.reset_quick_settings_to_defaults)
         self.setting_show_api_key.toggled.connect(self.toggle_api_key_visibility)
+        self.setting_capture_mode.currentIndexChanged.connect(self.refresh_capture_mode_warning)
 
         self.signals.toggle_session_requested.connect(self.toggle_session)
         self.signals.reset_requested.connect(self.reset_counters)
@@ -945,13 +791,23 @@ class MainWindow(QWidget):
         else:
             self.setting_api_key_status.setText("Henrik key: missing")
 
+    def refresh_capture_mode_warning(self) -> None:
+        mode = str(self.setting_capture_mode.currentData() or "performance")
+        if mode == "full_audit":
+            self.setting_capture_mode_warning.setText("Full Audit may affect performance.")
+        elif mode == "off":
+            self.setting_capture_mode_warning.setText("Off disables gameplay capture while leaving the app open.")
+        else:
+            self.setting_capture_mode_warning.setText("Performance is recommended while playing.")
+
     def load_settings_into_form(self, config: AppConfig) -> None:
-        self.setting_kcred_clean.setValue(int(config.kcred_per_clean_hit))
-        self.setting_penalty_brake.setValue(int(config.kcred_penalty_brake_error))
-        self.setting_penalty_diagonal.setValue(int(config.kcred_penalty_diagonal_error))
-        self.setting_penalty_no_ad.setValue(int(config.kcred_penalty_no_ad_error))
-        self.setting_xp_clean.setValue(int(config.xp_per_clean_hit))
-        self.setting_xp_level.setValue(int(config.xp_per_level))
+        if hasattr(self, "setting_kcred_clean"):
+            self.setting_kcred_clean.setValue(int(config.kcred_per_clean_hit))
+            self.setting_penalty_brake.setValue(int(config.kcred_penalty_brake_error))
+            self.setting_penalty_diagonal.setValue(int(config.kcred_penalty_diagonal_error))
+            self.setting_penalty_no_ad.setValue(int(config.kcred_penalty_no_ad_error))
+            self.setting_xp_clean.setValue(int(config.xp_per_clean_hit))
+            self.setting_xp_level.setValue(int(config.xp_per_level))
 
         self.setting_episode_timeout.setValue(float(config.episode_timeout))
         self.setting_click_cooldown.setValue(float(config.post_click_cooldown))
@@ -968,15 +824,21 @@ class MainWindow(QWidget):
 
         input_settings = dict(config.input_timing or {})
         self.setting_input_enabled.setChecked(bool(input_settings.get("enabled", True)))
+        self.set_combo_data(
+            self.setting_capture_mode,
+            str(input_settings.get("capture_mode", "performance")),
+        )
         self.setting_tap_max.setValue(float(input_settings.get("tap_max_seconds", 0.12)))
         self.setting_burst_max.setValue(float(input_settings.get("burst_max_seconds", 0.50)))
         self.setting_crouch_fire_max.setValue(float(input_settings.get("crouch_fire_max_seconds", 0.50)))
+        self.refresh_capture_mode_warning()
 
-        calendar_settings = dict(config.training_calendar or {})
-        self.setting_daily_goal.setValue(float(calendar_settings.get("daily_goal_hours", 2.0)))
-        self.setting_light_day.setValue(float(calendar_settings.get("light_day_hours", 0.5)))
-        self.setting_medium_day.setValue(float(calendar_settings.get("medium_day_hours", 1.0)))
-        self.setting_strong_day.setValue(float(calendar_settings.get("strong_day_hours", 2.0)))
+        if hasattr(self, "setting_daily_goal"):
+            calendar_settings = dict(config.training_calendar or {})
+            self.setting_daily_goal.setValue(float(calendar_settings.get("daily_goal_hours", 2.0)))
+            self.setting_light_day.setValue(float(calendar_settings.get("light_day_hours", 0.5)))
+            self.setting_medium_day.setValue(float(calendar_settings.get("medium_day_hours", 1.0)))
+            self.setting_strong_day.setValue(float(calendar_settings.get("strong_day_hours", 2.0)))
 
         tracker_settings = dict(config.tracker or {})
         self.setting_riot_name.setText(str(tracker_settings.get("riot_name", "")))
@@ -1009,12 +871,13 @@ class MainWindow(QWidget):
         })
 
         calendar_settings = dict(current.training_calendar or {})
-        calendar_settings.update({
-            "daily_goal_hours": self.setting_daily_goal.value(),
-            "light_day_hours": self.setting_light_day.value(),
-            "medium_day_hours": self.setting_medium_day.value(),
-            "strong_day_hours": self.setting_strong_day.value(),
-        })
+        if hasattr(self, "setting_daily_goal"):
+            calendar_settings.update({
+                "daily_goal_hours": self.setting_daily_goal.value(),
+                "light_day_hours": self.setting_light_day.value(),
+                "medium_day_hours": self.setting_medium_day.value(),
+                "strong_day_hours": self.setting_strong_day.value(),
+            })
 
         automation_settings = dict(current.session_automation or {})
         automation_settings.update({
@@ -1030,23 +893,18 @@ class MainWindow(QWidget):
         input_settings = dict(current.input_timing or {})
         input_settings.update({
             "enabled": self.setting_input_enabled.isChecked(),
+            "capture_mode": str(self.setting_capture_mode.currentData() or "performance"),
             "tap_max_seconds": self.setting_tap_max.value(),
             "burst_max_seconds": self.setting_burst_max.value(),
             "crouch_fire_max_seconds": self.setting_crouch_fire_max.value(),
         })
 
-        return AppConfig.from_dict({
+        payload = {
             "episode_timeout": self.setting_episode_timeout.value(),
             "post_click_cooldown": self.setting_click_cooldown.value(),
             "require_release_at_click": self.setting_require_release.isChecked(),
-            "kcred_per_clean_hit": self.setting_kcred_clean.value(),
-            "kcred_penalty_brake_error": self.setting_penalty_brake.value(),
-            "kcred_penalty_diagonal_error": self.setting_penalty_diagonal.value(),
-            "kcred_penalty_no_ad_error": self.setting_penalty_no_ad.value(),
             "stationary_click_counts_clean": self.setting_stationary_clean.isChecked(),
             "stationary_min_release_seconds": self.setting_stationary_release.value(),
-            "xp_per_clean_hit": self.setting_xp_clean.value(),
-            "xp_per_level": self.setting_xp_level.value(),
             "default_starting_balance": current.default_starting_balance,
             "default_next_weapon": current.default_next_weapon,
             "weapons": current.weapons,
@@ -1055,7 +913,26 @@ class MainWindow(QWidget):
             "session_automation": automation_settings,
             "protocol": protocol_settings,
             "input_timing": input_settings,
-        })
+        }
+        if hasattr(self, "setting_kcred_clean"):
+            payload.update({
+                "kcred_per_clean_hit": self.setting_kcred_clean.value(),
+                "kcred_penalty_brake_error": self.setting_penalty_brake.value(),
+                "kcred_penalty_diagonal_error": self.setting_penalty_diagonal.value(),
+                "kcred_penalty_no_ad_error": self.setting_penalty_no_ad.value(),
+                "xp_per_clean_hit": self.setting_xp_clean.value(),
+                "xp_per_level": self.setting_xp_level.value(),
+            })
+        else:
+            payload.update({
+                "kcred_per_clean_hit": current.kcred_per_clean_hit,
+                "kcred_penalty_brake_error": current.kcred_penalty_brake_error,
+                "kcred_penalty_diagonal_error": current.kcred_penalty_diagonal_error,
+                "kcred_penalty_no_ad_error": current.kcred_penalty_no_ad_error,
+                "xp_per_clean_hit": current.xp_per_clean_hit,
+                "xp_per_level": current.xp_per_level,
+            })
+        return AppConfig.from_dict(payload)
 
     def save_quick_settings(self) -> None:
         if self.controller.is_session_active or self.controller.has_pending_purchase:
@@ -1136,7 +1013,8 @@ class MainWindow(QWidget):
         self.mouse_listener = None
 
     def _update_capture_listeners(self) -> None:
-        if self.controller.is_session_active or self.is_auto_arm_enabled():
+        capture_enabled = self.controller.capture_mode != "off"
+        if capture_enabled and (self.controller.is_session_active or self.is_auto_arm_enabled()):
             self._ensure_mouse_listener()
         else:
             self._stop_mouse_listener()
@@ -1174,8 +1052,27 @@ class MainWindow(QWidget):
     def is_valorant_focused(self) -> bool:
         return "valorant" in self.get_foreground_window_title().lower()
 
+    def update_live_refresh_interval(self) -> None:
+        target_interval = (
+            self.ACTIVE_SESSION_UPDATE_INTERVAL_MS
+            if self.controller.is_session_active
+            else self.LIVE_UPDATE_INTERVAL_MS
+        )
+        if self.live_timer.interval() != target_interval:
+            self.live_timer.start(target_interval)
+
+    def is_debug_view_active(self) -> bool:
+        return (
+            getattr(self, "main_stack", None) is not None
+            and getattr(self, "settings_stack", None) is not None
+            and self.main_stack.currentWidget() is self.main_pages.get("settings")
+            and self.settings_stack.currentIndex() == 2
+        )
+
     def maybe_auto_start_session(self, trigger_input: str) -> bool:
         if self.controller.is_session_active:
+            return False
+        if self.controller.capture_mode == "off":
             return False
         if not self.is_auto_arm_enabled():
             return False
@@ -1479,7 +1376,8 @@ class MainWindow(QWidget):
 
     def populate_weapon_combo(self) -> None:
         self.weapon_combo.clear()
-        for item in self.controller.get_available_weapons():
+        available_weapons = self.controller.get_available_weapons()
+        for item in available_weapons:
             badges = []
             if item.get("owned"):
                 badges.append("ARS")
@@ -1493,8 +1391,10 @@ class MainWindow(QWidget):
                 model_item = self.weapon_combo.model().item(index)
                 if model_item is not None:
                     model_item.setEnabled(False)
+        self.refresh_inventory_details(available_weapons)
 
     def refresh_runtime_state(self) -> None:
+        self.update_live_refresh_interval()
         current_revision = self.controller.runtime_revision
         if (not self.controller.is_session_active) and current_revision == self.last_runtime_revision:
             return
@@ -1506,6 +1406,7 @@ class MainWindow(QWidget):
     def refresh_buttons(self) -> None:
         is_active = self.controller.is_session_active
         has_pending_purchase = self.controller.has_pending_purchase
+        self.update_live_refresh_interval()
         self._update_capture_listeners()
         self.status_label.setText(f"Status: {self.get_runtime_status_text()}")
         self.start_button.setEnabled((not is_active) and (not has_pending_purchase))
@@ -1527,6 +1428,7 @@ class MainWindow(QWidget):
                 self.purchase_status_label.setText("Ready to start Ranked audit.")
             else:
                 self.purchase_status_label.setText("Ready to start the next Deathmatch session.")
+        self.refresh_inventory_details()
 
     def refresh_all(self) -> None:
         self.refresh_dashboard()
@@ -1562,6 +1464,7 @@ class MainWindow(QWidget):
             f"Today: {stats.today.sessions} sessions | {stats.today.average_protocol_rate:.1f}% | "
             f"+{stats.today.kcreds_earned} Coins"
         )
+        self.coins_next_step_label.setText(f"Next step: {stats.next_weapon or '-'}")
 
         self.tracker_total_label.setText(f"Imported DMs: {stats.tracker.total_matches}")
         self.tracker_kd_label.setText(f"Average KD: {stats.tracker.average_kd:.2f}")
@@ -1593,6 +1496,47 @@ class MainWindow(QWidget):
         else:
             self.tracker_last_match_label.setText("Latest DM: -")
 
+        self.refresh_inventory_details()
+
+    def refresh_inventory_details(self, available_weapons: list[dict] | None = None) -> None:
+        wallet = self.controller.get_wallet()
+        weapons = available_weapons if available_weapons is not None else self.controller.get_available_weapons()
+        current_weapon = str(self.controller.current_weapon or wallet.get("next_weapon") or "-")
+        next_weapon = str(wallet.get("next_weapon") or "-")
+        available_names = [str(item.get("name") or "-") for item in weapons if item.get("available")]
+        owned_count = sum(1 for item in weapons if item.get("owned"))
+
+        self.coins_equipped_label.setText(f"Equipped weapon: {current_weapon}")
+        self.weapons_equipped_label.setText(f"Equipped weapon: {current_weapon}")
+        self.coins_next_step_label.setText(f"Next step: {next_weapon}")
+
+        if available_names:
+            preview = ", ".join(available_names[:5])
+            if len(available_names) > 5:
+                preview = f"{preview}, ..."
+            self.available_weapons_label.setText(
+                f"Available weapons now: {len(available_names)} | Owned: {owned_count} | {preview}"
+            )
+        else:
+            self.available_weapons_label.setText(
+                f"Available weapons now: none | Owned: {owned_count}"
+            )
+
+        if self.controller.has_pending_purchase:
+            self.inventory_hint_label.setText(
+                "A Deathmatch session is waiting for purchase confirmation in Weapons."
+            )
+        elif self.controller.current_session_mode == "ranked" and self.controller.is_session_active:
+            self.inventory_hint_label.setText(
+                "Ranked Audit is active. Coins are visible here, but Coins changes stay disabled."
+            )
+        elif wallet:
+            self.inventory_hint_label.setText(
+                "Wallet, next weapon, and progression use the current saved local data."
+            )
+        else:
+            self.inventory_hint_label.setText("Wallet data is not available yet.")
+
     def refresh_tracker_table(self) -> None:
         matches = load_tracker_dm_matches()[:150]
         headers = ["Date", "Map", "Agent", "K", "D", "A", "KD", "Duration", "Weapon", "Protocol"]
@@ -1620,6 +1564,10 @@ class MainWindow(QWidget):
             for col, value in enumerate(values):
                 self.tracker_table.setItem(row, col, QTableWidgetItem(str(value)))
         self.tracker_table.resizeColumnsToContents()
+        if matches:
+            self.tracker_status_label.setText(f"Showing {len(matches)} recent imported Deathmatches.")
+        else:
+            self.tracker_status_label.setText("No imported Deathmatches yet.")
 
     def refresh_ranked_tab(self) -> None:
         stats = build_ranked_radiante_stats()
@@ -1674,16 +1622,26 @@ class MainWindow(QWidget):
             for col, value in enumerate(values):
                 self.ranked_table.setItem(row, col, QTableWidgetItem(str(value)))
         self.ranked_table.resizeColumnsToContents()
+        if matches:
+            self.ranked_history_status_label.setText(f"Showing {len(matches)} recent ranked matches.")
+        else:
+            self.ranked_history_status_label.setText("No imported ranked matches yet.")
 
     def refresh_training_calendar_table(self) -> None:
         days = build_training_calendar()
         day_by_date = {day.date: day for day in days}
         self.render_training_calendar_grid(day_by_date)
-        self.render_training_days_summary(days[:90])
 
     def refresh_training_sessions_table(self) -> None:
         sessions = sorted(load_all_sessions(), key=lambda item: (item.finished_at, item.started_at), reverse=True)
-        self.training_sessions_summary_label.setText(f"Training sessions: {len(sessions)}")
+        if sessions:
+            self.training_sessions_summary_label.setText(f"Training sessions: {len(sessions)} total")
+            self.training_sessions_status_label.setText(
+                f"Showing the latest {min(len(sessions), 150)} saved sessions."
+            )
+        else:
+            self.training_sessions_summary_label.setText("Training sessions: 0")
+            self.training_sessions_status_label.setText("No saved sessions yet.")
         visible_sessions = sessions[:150]
         self.training_sessions_table.setRowCount(len(visible_sessions))
 
@@ -1749,25 +1707,6 @@ class MainWindow(QWidget):
                 self.training_calendar_table.setItem(row, col, item)
 
         self.training_calendar_table.resizeColumnsToContents()
-
-    def render_training_days_summary(self, days: list) -> None:
-        self.training_days_summary_table.setRowCount(len(days))
-
-        for row, day in enumerate(days):
-            hours_text = f"{day.total_hours:.2f}h"
-            time_text = self.format_duration(day.total_seconds)
-            values = [
-                day.date,
-                day.dm_count,
-                time_text,
-                hours_text,
-                f"{day.average_kd:.2f}",
-                day.linked_sessions,
-                day.weapons or "-",
-            ]
-            for col, value in enumerate(values):
-                self.training_days_summary_table.setItem(row, col, QTableWidgetItem(str(value)))
-        self.training_days_summary_table.resizeColumnsToContents()
 
     def show_previous_month(self) -> None:
         year = self.current_calendar_month.year
@@ -1863,6 +1802,54 @@ class MainWindow(QWidget):
             return QColor("#BFDBFE")
         return QColor("#DBEAFE")
 
+    def import_training_calendar_csv(self) -> None:
+        selected_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Training Calendar CSV",
+            str(DATA_DIR),
+            "CSV (*.csv)",
+        )
+
+        if not selected_path:
+            return
+
+        import csv
+        import shutil
+
+        required_headers = {
+            "date",
+            "dm_count",
+            "total_time",
+            "total_hours",
+            "average_kd",
+            "linked_sessions",
+            "average_protocol_rate",
+            "weapons",
+            "goal_met",
+        }
+
+        with open(selected_path, "r", encoding="utf-8-sig", newline="") as file:
+            reader = csv.DictReader(file, delimiter=";")
+            headers = set(reader.fieldnames or [])
+
+        if not required_headers.issubset(headers):
+            QMessageBox.warning(
+                self,
+                "Calendar CSV not recognized",
+                "The selected CSV does not match the expected Training Calendar export format.",
+            )
+            return
+
+        target_name = str(self.calendar_settings.get("export_filename") or "training_calendar_month.csv")
+        target_path = DATA_DIR / target_name
+        shutil.copyfile(selected_path, target_path)
+        QMessageBox.information(
+            self,
+            "Calendar CSV imported",
+            f"A validated copy was saved to:\n{target_path}\n\n"
+            "The live History calendar still uses local session and imported match data.",
+        )
+
     def export_current_month_calendar(self) -> None:
         days = build_training_calendar()
         year = self.current_calendar_month.year
@@ -1945,11 +1932,16 @@ class MainWindow(QWidget):
     def refresh_protocol_debug_view(self) -> None:
         mode = self.controller.current_diagonal_rule_mode
         session_mode = self.controller.current_session_mode
+        capture_mode = self.controller.capture_mode
         self.protocol_rule_status_label.setText(
-            f"Protocol rules: {session_mode} | diagonal mode {self.diagonal_mode_label(mode)} ({mode})"
+            f"Protocol rules: {session_mode} | capture {capture_mode} | diagonal mode {self.diagonal_mode_label(mode)} ({mode})"
         )
 
-        events = self.controller.live_protocol_events
+        if self.controller.is_session_active and not self.is_debug_view_active():
+            return
+
+        debug_lines_max = max(int((self.app_config.input_timing or {}).get("debug_lines_max", 100)), 10)
+        events = self.controller.get_live_protocol_events(limit=debug_lines_max)
         if not events:
             self.protocol_debug_text.setPlainText("No protocol events yet.")
             return
@@ -1971,7 +1963,7 @@ class MainWindow(QWidget):
             if self.controller.is_session_active:
                 self.ranked_live_summary_label.setText(
                     f"Ranked Audit Active | Valid attempts: {stats.valid_attempts} | "
-                    f"Current rate: {stats.protocol_rate:.1f}% | Protocol events: {len(self.controller.live_protocol_events)}"
+                    f"Current rate: {stats.protocol_rate:.1f}% | Protocol events: {stats.protocol_events_total}"
                 )
             else:
                 self.ranked_live_summary_label.setText("No ranked audit session is active.")
