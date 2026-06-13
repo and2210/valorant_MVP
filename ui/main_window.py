@@ -64,7 +64,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.21.11"
+    APP_VERSION = "v0.21.12"
 
     def __init__(self) -> None:
         super().__init__()
@@ -74,12 +74,13 @@ class MainWindow(QWidget):
         self.keyboard_listener = None
         self.mouse_listener = None
         self.last_runtime_revision = -1
-        self.setWindowTitle("MVP APP — Valorant Training / Coins")
+        self.setWindowTitle(f"MVP APP {self.APP_VERSION} - Valorant Training / Coins")
         self.resize(1180, 820)
         self.setMinimumSize(980, 680)
         self.current_calendar_month = date.today().replace(day=1)
         self.app_config = load_config()
         self.calendar_settings = self.app_config.training_calendar
+        self.weapon_selection_counts: dict[str, int] = {}
 
         self._build_ui()
         self._connect_signals()
@@ -180,6 +181,8 @@ class MainWindow(QWidget):
         self.main_stack.setCurrentIndex(index)
         for key, button in self.main_menu_buttons.items():
             button.setChecked(key == page_key)
+        if page_key == "history":
+            self._set_subpage(self.history_stack, 0, self.history_buttons)
 
     def _build_game_modes_shell(self) -> QWidget:
         return self._build_section_shell(
@@ -221,7 +224,9 @@ class MainWindow(QWidget):
         self.cart_total_label = screen.cart_total_label
         self.cart_balance_label = screen.cart_balance_label
         self.confirm_purchase_button = screen.confirm_purchase_button
+        self.confirm_sell_button = screen.confirm_sell_button
         self.clear_selection_button = screen.clear_selection_button
+        self.store_mode_combo = screen.store_mode_combo
         self.purchase_status_label = screen.purchase_status_label
         self.weapons_empty_label = screen.weapons_empty_label
         self.level_label = screen.level_label
@@ -239,9 +244,6 @@ class MainWindow(QWidget):
         self.calendar_month_label = screen.calendar_month_label
         self.today_month_button = screen.today_month_button
         self.next_month_button = screen.next_month_button
-        self.calendar_go_tracker_button = screen.calendar_go_tracker_button
-        self.calendar_go_training_button = screen.calendar_go_training_button
-        self.calendar_go_ranked_button = screen.calendar_go_ranked_button
         self.calendar_month_summary_label = screen.calendar_month_summary_label
         self.calendar_goal_label = screen.calendar_goal_label
         self.training_calendar_table = screen.training_calendar_table
@@ -414,6 +416,8 @@ class MainWindow(QWidget):
         root = QVBoxLayout(page)
         root.addWidget(QLabel("Import"))
         root.addWidget(self._build_tracker_settings_group())
+        root.addWidget(self._build_match_import_group("Deathmatch", ranked=False))
+        root.addWidget(self._build_match_import_group("Ranked", ranked=True))
         calendar_group = QGroupBox("Training Calendar")
         calendar_layout = QHBoxLayout(calendar_group)
         self.import_training_calendar_button = QPushButton("Import Training Calendar CSV")
@@ -424,11 +428,45 @@ class MainWindow(QWidget):
         calendar_layout.addWidget(self.export_training_calendar_button)
         calendar_layout.addWidget(calendar_note, stretch=1)
         root.addWidget(calendar_group)
-        note = QLabel("Match import actions stay under History. Import credentials and limits live here.")
-        note.setWordWrap(True)
-        root.addWidget(note)
         root.addStretch(1)
         return page
+
+    def _build_match_import_group(self, title: str, ranked: bool) -> QGroupBox:
+        group = QGroupBox(f"{title} Import")
+        layout = QGridLayout(group)
+        mode = QComboBox()
+        mode.addItem("Update only", "update")
+        mode.addItem("Import whole season", "season")
+        mode.addItem("Import date range", "range")
+        season = QComboBox()
+        season.addItem("Current season", "current")
+        if ranked:
+            self.ranked_import_mode = mode
+            self.ranked_season_selector = season
+            action = self.import_ranked_button
+            from_date = self.ranked_from_date
+            to_date = self.ranked_to_date
+        else:
+            self.dm_import_mode = mode
+            self.dm_season_selector = season
+            action = self.import_tracker_button
+            from_date = self.import_from_date
+            to_date = self.import_to_date
+        action.setText(f"Run {title} Import")
+        layout.addWidget(QLabel("Mode:"), 0, 0)
+        layout.addWidget(mode, 0, 1)
+        layout.addWidget(QLabel("Season:"), 1, 0)
+        layout.addWidget(season, 1, 1)
+        layout.addWidget(QLabel("From:"), 2, 0)
+        layout.addWidget(from_date, 2, 1)
+        layout.addWidget(QLabel("To:"), 2, 2)
+        layout.addWidget(to_date, 2, 3)
+        layout.addWidget(action, 3, 0, 1, 2)
+        mode.currentIndexChanged.connect(
+            lambda _=0, is_ranked=ranked: self.refresh_import_mode(is_ranked)
+        )
+        self.refresh_import_mode(ranked)
+        return group
 
     def _build_debug_settings_page(self) -> QWidget:
         page = QWidget()
@@ -452,6 +490,8 @@ class MainWindow(QWidget):
         self.setting_diagonal_rule.addItem("Informational", "informational")
         self.setting_diagonal_rule.addItem("Disabled", "disabled")
         self.setting_auto_arm = QCheckBox("Enable Auto-Arm session start")
+        self.setting_ranked_entry_cost = self.make_int_spin(0, 100000)
+        self.setting_ranked_bonus = self.make_int_spin(0, 100000)
         protocol_form.addRow("Episode timeout:", self.setting_episode_timeout)
         protocol_form.addRow("Post-click cooldown:", self.setting_click_cooldown)
         protocol_form.addRow("Standing shot rule:", self.setting_stationary_clean)
@@ -459,6 +499,8 @@ class MainWindow(QWidget):
         protocol_form.addRow("A/D release rule:", self.setting_require_release)
         protocol_form.addRow("Diagonal Footwork:", self.setting_diagonal_rule)
         protocol_form.addRow("Session start:", self.setting_auto_arm)
+        protocol_form.addRow("Ranked entry cost:", self.setting_ranked_entry_cost)
+        protocol_form.addRow("Ranked bonus / clean hit:", self.setting_ranked_bonus)
         return protocol_group
 
     def _build_input_settings_group(self) -> QGroupBox:
@@ -467,15 +509,12 @@ class MainWindow(QWidget):
         self.setting_input_enabled = QCheckBox("Track key, mouse, and scroll duration")
         self.setting_capture_mode = QComboBox()
         self.setting_capture_mode.addItem("Performance", "performance")
-        self.setting_capture_mode.addItem("Full Audit", "full_audit")
-        self.setting_capture_mode.addItem("Off", "off")
-        self.setting_capture_mode_warning = QLabel("Performance is recommended while playing. Full Audit may affect performance.")
+        self.setting_capture_mode_warning = QLabel("Performance capture is always enabled.")
         self.setting_capture_mode_warning.setWordWrap(True)
         self.setting_tap_max = self.make_seconds_spin(0.01, 2.00)
         self.setting_burst_max = self.make_seconds_spin(0.05, 5.00)
         self.setting_crouch_fire_max = self.make_seconds_spin(0.05, 5.00)
         input_form.addRow("Input timing:", self.setting_input_enabled)
-        input_form.addRow("Capture Mode:", self.setting_capture_mode)
         input_form.addRow("Tap max:", self.setting_tap_max)
         input_form.addRow("Burst max:", self.setting_burst_max)
         input_form.addRow("Crouch+fire max:", self.setting_crouch_fire_max)
@@ -715,19 +754,15 @@ class MainWindow(QWidget):
         self.reset_button.clicked.connect(self.reset_counters)
         self.refresh_button.clicked.connect(self.refresh_all)
         self.confirm_purchase_button.clicked.connect(self.confirm_purchase)
+        self.confirm_sell_button.clicked.connect(self.confirm_sell)
+        self.clear_selection_button.clicked.connect(self.clear_weapon_selection)
+        self.store_mode_combo.currentIndexChanged.connect(self.clear_weapon_selection)
         self.session_mode_combo.currentIndexChanged.connect(self.change_session_mode)
         self.import_tracker_button.clicked.connect(self.import_tracker_deathmatches)
-        self.import_day_button.clicked.connect(self.import_tracker_selected_day)
-        self.import_range_button.clicked.connect(self.import_tracker_selected_range)
         self.import_ranked_button.clicked.connect(self.import_tracker_rankeds)
-        self.import_ranked_day_button.clicked.connect(self.import_ranked_selected_day)
-        self.import_ranked_range_button.clicked.connect(self.import_ranked_selected_range)
         self.prev_month_button.clicked.connect(self.show_previous_month)
         self.today_month_button.clicked.connect(self.show_current_month)
         self.next_month_button.clicked.connect(self.show_next_month)
-        self.calendar_go_tracker_button.clicked.connect(lambda: self._set_subpage(self.history_stack, 1, self.history_buttons))
-        self.calendar_go_training_button.clicked.connect(lambda: self._set_subpage(self.history_stack, 2, self.history_buttons))
-        self.calendar_go_ranked_button.clicked.connect(lambda: self._set_subpage(self.history_stack, 3, self.history_buttons))
         self.import_training_calendar_button.clicked.connect(self.import_training_calendar_csv)
         self.export_training_calendar_button.clicked.connect(self.export_current_month_calendar)
         self.save_settings_button.clicked.connect(self.save_quick_settings)
@@ -792,13 +827,7 @@ class MainWindow(QWidget):
             self.setting_api_key_status.setText("Henrik key: missing")
 
     def refresh_capture_mode_warning(self) -> None:
-        mode = str(self.setting_capture_mode.currentData() or "performance")
-        if mode == "full_audit":
-            self.setting_capture_mode_warning.setText("Full Audit may affect performance.")
-        elif mode == "off":
-            self.setting_capture_mode_warning.setText("Off disables gameplay capture while leaving the app open.")
-        else:
-            self.setting_capture_mode_warning.setText("Performance is recommended while playing.")
+        self.setting_capture_mode_warning.setText("Performance capture is always enabled.")
 
     def load_settings_into_form(self, config: AppConfig) -> None:
         if hasattr(self, "setting_kcred_clean"):
@@ -821,6 +850,9 @@ class MainWindow(QWidget):
         )
         automation_settings = dict(config.session_automation or {})
         self.setting_auto_arm.setChecked(bool(automation_settings.get("auto_arm_enabled", False)))
+        ranked_economy = dict(config.ranked_economy or {})
+        self.setting_ranked_entry_cost.setValue(int(ranked_economy.get("entry_cost", 0)))
+        self.setting_ranked_bonus.setValue(int(ranked_economy.get("bonus_per_clean_hit", 0)))
 
         input_settings = dict(config.input_timing or {})
         self.setting_input_enabled.setChecked(bool(input_settings.get("enabled", True)))
@@ -893,7 +925,7 @@ class MainWindow(QWidget):
         input_settings = dict(current.input_timing or {})
         input_settings.update({
             "enabled": self.setting_input_enabled.isChecked(),
-            "capture_mode": str(self.setting_capture_mode.currentData() or "performance"),
+            "capture_mode": "performance",
             "tap_max_seconds": self.setting_tap_max.value(),
             "burst_max_seconds": self.setting_burst_max.value(),
             "crouch_fire_max_seconds": self.setting_crouch_fire_max.value(),
@@ -912,6 +944,10 @@ class MainWindow(QWidget):
             "training_calendar": calendar_settings,
             "session_automation": automation_settings,
             "protocol": protocol_settings,
+            "ranked_economy": {
+                "entry_cost": self.setting_ranked_entry_cost.value(),
+                "bonus_per_clean_hit": self.setting_ranked_bonus.value(),
+            },
             "input_timing": input_settings,
         }
         if hasattr(self, "setting_kcred_clean"):
@@ -1182,7 +1218,10 @@ class MainWindow(QWidget):
         result = self.controller.finish_session()
         self._update_capture_listeners()
         if result.session_mode == "deathmatch":
+            self.set_combo_data(self.store_mode_combo, "equip")
             self.populate_weapon_combo()
+            self.show_main_page("inventory")
+            self._set_subpage(self.inventory_stack, 1, self.inventory_buttons)
         self.refresh_all()
 
     def reset_counters(self) -> None:
@@ -1192,14 +1231,84 @@ class MainWindow(QWidget):
 
     def confirm_purchase(self) -> None:
         if self.controller.last_finished_session is None:
+            try:
+                self.controller.buy_inventory_cart(self.weapon_selection_counts)
+            except ValueError as error:
+                QMessageBox.warning(self, "Purchase failed", str(error))
+            else:
+                self.clear_weapon_selection()
+                self.refresh_all()
             return
-        weapon_name = str(self.weapon_combo.currentData() or "")
+        weapon_name = self.selected_weapon_name()
         try:
             self.controller.confirm_purchase_by_name(weapon_name)
         except (RuntimeError, ValueError) as error:
             QMessageBox.warning(self, "Purchase failed", self.translate_runtime_error(error))
             return
         self.refresh_all()
+
+    def confirm_sell(self) -> None:
+        try:
+            self.controller.sell_inventory_cart(self.weapon_selection_counts)
+        except ValueError as error:
+            QMessageBox.warning(self, "Sale failed", str(error))
+            return
+        self.clear_weapon_selection()
+        self.refresh_all()
+
+    def selected_weapon_name(self) -> str:
+        selected = [name for name, quantity in self.weapon_selection_counts.items() if quantity > 0]
+        return selected[-1] if selected else "Classic"
+
+    def clear_weapon_selection(self) -> None:
+        self.weapon_selection_counts.clear()
+        self.populate_weapon_combo()
+
+    def select_weapon(self, weapon_name: str) -> None:
+        items = {item["name"]: item for item in self.controller.get_available_weapons()}
+        item = items.get(weapon_name)
+        if item is None:
+            return
+        mode = str(self.store_mode_combo.currentData() or "buy")
+        if mode == "equip":
+            if not item.get("owned"):
+                return
+            try:
+                if self.controller.has_pending_purchase:
+                    self.controller.confirm_purchase_by_name(weapon_name)
+                else:
+                    self.controller.equip_weapon(weapon_name)
+            except (RuntimeError, ValueError) as error:
+                QMessageBox.warning(self, "Equip failed", self.translate_runtime_error(error))
+            self.refresh_all()
+            return
+        if weapon_name == "Classic":
+            return
+        limit = int(item.get("owned_quantity", 0)) if mode == "sell" else 999
+        current = int(self.weapon_selection_counts.get(weapon_name, 0))
+        if current < limit:
+            self.weapon_selection_counts[weapon_name] = current + 1
+        self.populate_weapon_combo()
+
+    def refresh_import_mode(self, ranked: bool) -> None:
+        mode = self.ranked_import_mode if ranked else self.dm_import_mode
+        season = self.ranked_season_selector if ranked else self.dm_season_selector
+        from_date = self.ranked_from_date if ranked else self.import_from_date
+        to_date = self.ranked_to_date if ranked else self.import_to_date
+        value = str(mode.currentData() or "update")
+        season.setEnabled(value == "season")
+        from_date.setEnabled(value == "range")
+        to_date.setEnabled(value == "range")
+
+    def validate_import_dates(self, from_date: QDateEdit, to_date: QDateEdit) -> bool:
+        today = QDate.currentDate()
+        if from_date.date() > today or to_date.date() > today:
+            QMessageBox.warning(self, "Invalid range", "Import dates cannot be in the future.")
+            return False
+        if from_date.date() > to_date.date():
+            QMessageBox.warning(self, "Invalid range", "The From date cannot be later than the To date.")
+            return False
+        return True
 
     def selected_session_mode(self) -> str:
         return str(self.session_mode_combo.currentData() or "deathmatch")
@@ -1227,8 +1336,18 @@ class MainWindow(QWidget):
         self.session_mode_combo.blockSignals(False)
 
     def import_tracker_deathmatches(self) -> None:
-        import_all = self.import_all_tracker_checkbox.isChecked()
-        self.run_tracker_import(import_all=import_all)
+        mode = str(self.dm_import_mode.currentData() or "update")
+        if mode == "range":
+            if not self.validate_import_dates(self.import_from_date, self.import_to_date):
+                return
+            self.run_tracker_import(
+                import_all=True,
+                start_date=self.import_from_date.date().toString("yyyy-MM-dd"),
+                end_date=self.import_to_date.date().toString("yyyy-MM-dd"),
+                replace_date_range=True,
+            )
+            return
+        self.run_tracker_import(import_all=mode == "season")
 
     def import_tracker_selected_day(self) -> None:
         selected = self.import_from_date.date().toString("yyyy-MM-dd")
@@ -1294,10 +1413,21 @@ class MainWindow(QWidget):
             self.refresh_all()
         finally:
             self.set_tracker_import_controls_enabled(True)
+            self.refresh_import_mode(False)
 
     def import_tracker_rankeds(self) -> None:
-        import_all = self.import_all_ranked_checkbox.isChecked()
-        self.run_ranked_import(import_all=import_all)
+        mode = str(self.ranked_import_mode.currentData() or "update")
+        if mode == "range":
+            if not self.validate_import_dates(self.ranked_from_date, self.ranked_to_date):
+                return
+            self.run_ranked_import(
+                import_all=True,
+                start_date=self.ranked_from_date.date().toString("yyyy-MM-dd"),
+                end_date=self.ranked_to_date.date().toString("yyyy-MM-dd"),
+                replace_date_range=True,
+            )
+            return
+        self.run_ranked_import(import_all=mode == "season")
 
     def import_ranked_selected_day(self) -> None:
         selected = self.ranked_from_date.date().toString("yyyy-MM-dd")
@@ -1363,6 +1493,7 @@ class MainWindow(QWidget):
             self.refresh_all()
         finally:
             self.set_ranked_import_controls_enabled(True)
+            self.refresh_import_mode(True)
 
     # ------------------------------------------------------------------
     # Refresh/render
@@ -1377,6 +1508,13 @@ class MainWindow(QWidget):
     def populate_weapon_combo(self) -> None:
         self.weapon_combo.clear()
         available_weapons = self.controller.get_available_weapons()
+        for layout_index in range(4):
+            layout = getattr(self.inventory_screen, f"weapon_group_layout_{layout_index}")
+            while layout.count():
+                layout_item = layout.takeAt(0)
+                if layout_item.widget() is not None:
+                    layout_item.widget().deleteLater()
+        self.weapon_button_widgets.clear()
         for item in available_weapons:
             badges = []
             if item.get("owned"):
@@ -1391,6 +1529,36 @@ class MainWindow(QWidget):
                 model_item = self.weapon_combo.model().item(index)
                 if model_item is not None:
                     model_item.setEnabled(False)
+            button = QPushButton(item["name"])
+            button.setToolTip(
+                f"{item['name']} | {item['cost']} Coins | owned {item.get('owned_quantity', 0)}"
+            )
+            selected = int(self.weapon_selection_counts.get(item["name"], 0))
+            if selected:
+                button.setText(f"{item['name']} ({selected})")
+            button.clicked.connect(lambda _=False, name=item["name"]: self.select_weapon(name))
+            group_names = ["Sidearms", "SMGs / Shotguns", "Rifles", "Snipers / Heavies"]
+            group_index = group_names.index(item.get("group")) if item.get("group") in group_names else 0
+            getattr(self.inventory_screen, f"weapon_group_layout_{group_index}").addWidget(button)
+            self.weapon_button_widgets[item["name"]] = button
+        mode = str(self.store_mode_combo.currentData() or "buy")
+        selected_lines = [
+            f"{name} x{quantity}"
+            for name, quantity in self.weapon_selection_counts.items()
+            if quantity > 0
+        ]
+        total = sum(
+            int(item["cost"]) * int(self.weapon_selection_counts.get(item["name"], 0))
+            for item in available_weapons
+        )
+        self.cart_summary_label.setText(
+            "Selected weapons: " + (", ".join(selected_lines) or "none")
+        )
+        self.cart_total_label.setText(
+            f"{'Refund' if mode == 'sell' else 'Total cost'}: {total} Coins"
+        )
+        self.confirm_purchase_button.setVisible(mode == "buy" or self.controller.has_pending_purchase)
+        self.confirm_sell_button.setVisible(mode == "sell" and not self.controller.has_pending_purchase)
         self.refresh_inventory_details(available_weapons)
 
     def refresh_runtime_state(self) -> None:
@@ -1414,23 +1582,24 @@ class MainWindow(QWidget):
         self.reset_button.setEnabled(is_active)
         self.session_mode_combo.setEnabled((not is_active) and (not has_pending_purchase))
         self.weapon_combo.setEnabled(has_pending_purchase)
-        self.confirm_purchase_button.setEnabled(has_pending_purchase)
+        self.confirm_purchase_button.setEnabled(has_pending_purchase or bool(self.weapon_selection_counts))
         self.set_session_mode_combo(self.controller.current_session_mode)
         if is_active:
             if self.controller.current_session_mode == "ranked":
-                self.purchase_status_label.setText("Ranked audit session is active. Coins are disabled.")
+                self.purchase_status_label.setText("Ranked audit session is active. Economy settles when the session ends.")
             else:
                 self.purchase_status_label.setText("Deathmatch session is active.")
         elif has_pending_purchase:
             self.purchase_status_label.setText("Choose the next weapon for Deathmatch.")
         else:
             if self.controller.current_session_mode == "ranked":
-                self.purchase_status_label.setText("Ready to start Ranked audit.")
+                self.purchase_status_label.setText("Ready to start Ranked audit and economy tracking.")
             else:
                 self.purchase_status_label.setText("Ready to start the next Deathmatch session.")
         self.refresh_inventory_details()
 
     def refresh_all(self) -> None:
+        self.populate_weapon_combo()
         self.refresh_dashboard()
         self.refresh_live_stats()
         self.refresh_buttons()
@@ -1528,7 +1697,7 @@ class MainWindow(QWidget):
             )
         elif self.controller.current_session_mode == "ranked" and self.controller.is_session_active:
             self.inventory_hint_label.setText(
-                "Ranked Audit is active. Coins are visible here, but Coins changes stay disabled."
+                "Ranked Audit is active. Entry, refund, and bonus settle when the session ends."
             )
         elif wallet:
             self.inventory_hint_label.setText(
@@ -1959,7 +2128,7 @@ class MainWindow(QWidget):
         self.ignored_clicks_label.setText(f"Ignored clicks: {stats.ignored_clicks}")
         self.current_rate_label.setText(f"Current rate: {stats.protocol_rate:.1f}%")
         if self.controller.current_session_mode == "ranked":
-            self.current_kcred_label.setText("Coins this session: disabled (Ranked audit)")
+            self.current_kcred_label.setText("Ranked economy: settles at session end")
             if self.controller.is_session_active:
                 self.ranked_live_summary_label.setText(
                     f"Ranked Audit Active | Valid attempts: {stats.valid_attempts} | "

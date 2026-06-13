@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 
@@ -31,8 +32,15 @@ FORBIDDEN_SEGMENTS = {
 
 
 def git_ls_files() -> list[str]:
+    git = shutil.which("git")
+    if git is None:
+        common_git = Path(r"C:\Program Files\Git\cmd\git.exe")
+        if common_git.is_file():
+            git = str(common_git)
+    if git is None:
+        raise RuntimeError("Git executable was not found.")
     result = subprocess.run(
-        ["git", "ls-files"],
+        [git, "ls-files"],
         cwd=ROOT,
         capture_output=True,
         text=True,

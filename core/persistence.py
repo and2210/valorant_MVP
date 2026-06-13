@@ -84,6 +84,10 @@ def normalize_wallet(wallet: dict) -> dict:
     wallet.setdefault("total_spent", 0)
     wallet.setdefault("sessions", [])
     wallet.setdefault("session_count", len(wallet.get("sessions", [])))
+    wallet["balance"] = max(int(wallet.get("balance", 0)), 0)
+    wallet["total_earned"] = max(int(wallet.get("total_earned", 0)), 0)
+    wallet["total_spent"] = max(int(wallet.get("total_spent", 0)), 0)
+    wallet["session_count"] = max(int(wallet.get("session_count", 0)), 0)
     return wallet
 
 

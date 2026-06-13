@@ -73,6 +73,7 @@ class InputTimingStats:
     jump_window_events: int = 0
     jump_window_active_seconds: float = 0.0
     jump_strafe_count: int = 0
+    jump_strafe_seconds: float = 0.0
     fire_taps: int = 0
     fire_bursts: int = 0
     fire_long_sprays: int = 0
@@ -112,6 +113,7 @@ class InputTimingStats:
         data["forward_seconds"] = round(self.forward_seconds, 4)
         data["lateral_seconds"] = round(self.lateral_seconds, 4)
         data["jump_window_active_seconds"] = round(self.jump_window_active_seconds, 4)
+        data["jump_strafe_seconds"] = round(self.jump_strafe_seconds, 4)
         return data
 
 
@@ -463,8 +465,12 @@ class InputTimingTracker:
             self.stats.forward_seconds += elapsed
         if has_lateral:
             self.stats.lateral_seconds += elapsed
+        jump_window_active = self.is_jump_related_window_active(now)
         if has_forward and has_lateral:
-            self.stats.diagonal_seconds += elapsed
+            if jump_window_active:
+                self.stats.jump_strafe_seconds += elapsed
+            else:
+                self.stats.diagonal_seconds += elapsed
         if self.is_jump_window_active(now):
             self.stats.jump_window_active_seconds += elapsed
 

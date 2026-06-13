@@ -190,6 +190,18 @@ def set_next_weapon(weapon_name: str) -> dict[str, Any]:
     return inventory
 
 
+def equip_owned_weapon(weapon_name: str) -> dict[str, Any]:
+    inventory = load_inventory()
+    if weapon_name not in inventory.get("owned_weapons", []):
+        raise ValueError("Only owned weapons can be equipped.")
+    inventory["next_weapon"] = weapon_name
+    wallet = load_wallet()
+    wallet["next_weapon"] = weapon_name
+    save_wallet(wallet)
+    save_inventory(inventory)
+    return inventory
+
+
 def register_weapon_purchase(weapon: dict[str, Any], session_id: int, balance_after_purchase: int) -> dict[str, Any]:
     inventory = set_next_weapon(weapon["name"])
 
@@ -256,11 +268,7 @@ def get_weapon_group_name(weapon_name: str) -> str:
 
 def build_owned_weapon_counts(inventory: dict[str, Any] | None = None) -> dict[str, int]:
     inventory = normalize_inventory(inventory or load_inventory())
-    counts: dict[str, int] = {}
-
-    for weapon_name in inventory.get("owned_weapons", []):
-        if get_weapon_by_name(weapon_name) is not None:
-            counts[weapon_name] = max(int(counts.get(weapon_name, 0)), 1)
+    counts: dict[str, int] = {name: 0 for name in inventory.get("owned_weapons", [])}
 
     for item in inventory.get("purchase_history", []):
         if not isinstance(item, dict):
@@ -269,6 +277,10 @@ def build_owned_weapon_counts(inventory: dict[str, Any] | None = None) -> dict[s
         if get_weapon_by_name(weapon_name) is None:
             continue
         counts[weapon_name] = int(counts.get(weapon_name, 0)) + 1
+
+    for weapon_name in list(counts):
+        if counts[weapon_name] <= 0:
+            counts[weapon_name] = 1
 
     return counts
 
@@ -286,6 +298,8 @@ def purchase_weapons_batch(selection_counts: dict[str, int]) -> dict[str, Any]:
         weapon = get_weapon_by_name(weapon_name)
         if weapon is None:
             raise ValueError(f"Invalid weapon: {weapon_name}")
+        if weapon["name"] == get_default_weapon_name():
+            raise ValueError("Classic is owned by default and cannot be bought.")
         normalized_selection.append((weapon, quantity))
         total_cost += int(weapon.get("cost", 0)) * quantity
 
@@ -326,6 +340,52 @@ def purchase_weapons_batch(selection_counts: dict[str, int]) -> dict[str, Any]:
         "selection_counts": {weapon["name"]: quantity for weapon, quantity in normalized_selection},
         "next_weapon": last_weapon_name,
     }
+
+
+def sell_weapons_batch(selection_counts: dict[str, int]) -> dict[str, Any]:
+    wallet = load_wallet()
+    inventory = load_inventory()
+    default_weapon = get_default_weapon_name()
+    owned_counts = build_owned_weapon_counts(inventory)
+    total_refund = 0
+
+    for weapon_name, raw_quantity in selection_counts.items():
+        quantity = max(int(raw_quantity), 0)
+        if quantity <= 0:
+            continue
+        if weapon_name == default_weapon:
+            raise ValueError("Classic cannot be sold.")
+        weapon = get_weapon_by_name(weapon_name)
+        if weapon is None:
+            raise ValueError(f"Invalid weapon: {weapon_name}")
+        if quantity > int(owned_counts.get(weapon_name, 0)):
+            raise ValueError(f"Not enough owned copies of {weapon_name}.")
+        total_refund += int(weapon.get("cost", 0)) * quantity
+        owned_counts[weapon_name] -= quantity
+
+        remaining = quantity
+        history = inventory.get("purchase_history", [])
+        for index in range(len(history) - 1, -1, -1):
+            if remaining <= 0:
+                break
+            if str(history[index].get("weapon") or "") == weapon_name:
+                history.pop(index)
+                remaining -= 1
+
+        if owned_counts[weapon_name] <= 0 and weapon_name in inventory["owned_weapons"]:
+            inventory["owned_weapons"].remove(weapon_name)
+
+    if total_refund <= 0:
+        raise ValueError("Select at least one weapon to sell.")
+
+    wallet["balance"] = max(int(wallet.get("balance", 0)) + total_refund, 0)
+    wallet["total_spent"] = max(int(wallet.get("total_spent", 0)) - total_refund, 0)
+    if inventory.get("next_weapon") not in inventory.get("owned_weapons", []):
+        inventory["next_weapon"] = default_weapon
+        wallet["next_weapon"] = default_weapon
+    save_wallet(wallet)
+    save_inventory(inventory)
+    return {"wallet": wallet, "inventory": inventory, "total_refund": total_refund}
 
 
 def build_inventory_summary() -> dict[str, Any]:

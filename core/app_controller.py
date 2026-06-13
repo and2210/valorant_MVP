@@ -5,7 +5,13 @@ from typing import Any
 
 from core.dashboard import DashboardStats, build_dashboard_stats
 from core.input_timing import InputTimingStats, InputTimingTracker
-from core.inventory import get_weapon_by_name, list_weapons_with_status, purchase_weapons_batch
+from core.inventory import (
+    equip_owned_weapon,
+    get_weapon_by_name,
+    list_weapons_with_status,
+    purchase_weapons_batch,
+    sell_weapons_batch,
+)
 from core.kcred_engine import calculate_session_kcreds
 from core.models import DMResult
 from core.persistence import load_wallet
@@ -260,6 +266,18 @@ class AppController:
         self.invalidate_cached_resources()
         self.sync_state()
         return summary
+
+    def sell_inventory_cart(self, selection_counts: dict[str, int]) -> dict[str, Any]:
+        summary = sell_weapons_batch(selection_counts)
+        self.invalidate_cached_resources()
+        self.sync_state()
+        return summary
+
+    def equip_weapon(self, weapon_name: str) -> None:
+        equip_owned_weapon(weapon_name)
+        self.session_manager.current_session_weapon = weapon_name
+        self.invalidate_cached_resources()
+        self.sync_state()
 
     # ------------------------------------------------------------------
     # Consultas para UI

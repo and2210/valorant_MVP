@@ -24,10 +24,11 @@ class InventoryScreen(QWidget):
 
         self.inventory_stack = QStackedWidget()
         self.inventory_buttons: list[QPushButton] = []
+        progression_page = self._build_coins_page()
+        progression_page.layout().insertWidget(1, self._build_progression_page())
         entries = [
-            ("Coins", self._build_coins_page()),
+            ("Progression", progression_page),
             ("Weapons", self._build_weapons_page()),
-            ("Progression", self._build_progression_page()),
         ]
 
         buttons_layout = QHBoxLayout()
@@ -92,7 +93,12 @@ class InventoryScreen(QWidget):
         self.weapon_combo = QComboBox()
         self.weapon_combo.hide()
         self.confirm_purchase_button = QPushButton("Buy All")
+        self.confirm_sell_button = QPushButton("Sell Selected")
         self.clear_selection_button = QPushButton("Clear Selection")
+        self.store_mode_combo = QComboBox()
+        self.store_mode_combo.addItem("Buy", "buy")
+        self.store_mode_combo.addItem("Sell", "sell")
+        self.store_mode_combo.addItem("Equip", "equip")
         self.purchase_status_label = QLabel("Use the store grid below. Deathmatch pending purchases remain compatible here.")
         self.purchase_status_label.setWordWrap(True)
         self.weapons_empty_label = QLabel("No weapon data is available.")
@@ -104,6 +110,7 @@ class InventoryScreen(QWidget):
         self.weapon_cost_labels: dict[str, QLabel] = {}
         self.weapon_group_boxes: dict[str, QGroupBox] = {}
         self.weapon_grid_layout = QGridLayout()
+        purchase_layout.addWidget(self.store_mode_combo)
         for column, group_name in enumerate(
             ["Sidearms", "SMGs / Shotguns", "Rifles", "Snipers / Heavies"]
         ):
@@ -124,6 +131,7 @@ class InventoryScreen(QWidget):
         self.cart_balance_label = QLabel("Available Coins: -")
         cart_actions = QHBoxLayout()
         cart_actions.addWidget(self.confirm_purchase_button)
+        cart_actions.addWidget(self.confirm_sell_button)
         cart_actions.addWidget(self.clear_selection_button)
         cart_actions.addStretch(1)
         cart_layout.addWidget(self.cart_summary_label)

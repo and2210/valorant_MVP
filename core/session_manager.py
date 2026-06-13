@@ -6,7 +6,13 @@ from pathlib import Path
 
 from core.config import DATA_DIR
 from core.input_timing import InputTimingStats, InputTimingTracker
-from core.inventory import get_next_weapon, register_weapon_purchase, register_weapon_usage
+from core.inventory import (
+    equip_owned_weapon,
+    get_next_weapon,
+    load_inventory,
+    register_weapon_purchase,
+    register_weapon_usage,
+)
 from core.kcred_engine import apply_session_earning
 from core.kcred_engine import buy_weapon as buy_weapon_with_kcred
 from core.kcred_engine import calculate_session_kcreds
@@ -93,9 +99,21 @@ class SessionManager:
         balance_before = int(wallet.get("balance", 0))
 
         if self.current_session_mode == "ranked":
-            earned = 0
-            balance_after_earning = balance_before
-            session_id = int(wallet.get("session_count", 0)) + 1
+            economy_settings = dict(self.tracker.config.ranked_economy or {})
+            entry_cost = min(max(int(economy_settings.get("entry_cost", 0)), 0), max(balance_before, 0))
+            utilization_score = max(0.0, min(float(stats.protocol_rate), 100.0))
+            refund = int(round(entry_cost * utilization_score / 100.0))
+            bonus = max(int(stats.clean_hits), 0) * max(
+                int(economy_settings.get("bonus_per_clean_hit", 0)),
+                0,
+            )
+            earned = refund + bonus - entry_cost
+            balance_after_earning = max(balance_before + earned, 0)
+            wallet["balance"] = balance_after_earning
+            wallet["total_earned"] = int(wallet.get("total_earned", 0)) + refund + bonus
+            wallet["total_spent"] = int(wallet.get("total_spent", 0)) + entry_cost
+            wallet["session_count"] = int(wallet.get("session_count", 0)) + 1
+            session_id = int(wallet.get("session_count", 0))
         else:
             earned = calculate_session_kcreds(stats, self.tracker.config)
             wallet, balance_before, balance_after_earning = apply_session_earning(wallet, earned)
@@ -116,8 +134,12 @@ class SessionManager:
         self.last_finished_session = result
         self.last_session_config_snapshot = dict(self.current_session_config_snapshot)
         self.session_started_at = None
-        if self.current_session_mode == "deathmatch":
+        save_wallet(wallet)
+        if self.current_session_mode == "ranked":
+            wallet = append_session_to_wallet_history(wallet, result)
             save_wallet(wallet)
+            append_session_to_csv(result)
+            self.last_finished_session = None
         self.save_session_audit_json(
             result,
             protocol_summary=protocol_summary,
@@ -161,6 +183,19 @@ class SessionManager:
             "balance_final": int(balance_after_earning),
             "pending_purchase_enabled": self.current_session_mode == "deathmatch",
         }
+        if self.current_session_mode == "ranked":
+            settings = dict(self.tracker.config.ranked_economy or {})
+            entry_cost = min(max(int(settings.get("entry_cost", 0)), 0), max(int(balance_before), 0))
+            utilization_score = max(0.0, min(float(stats.protocol_rate), 100.0))
+            refund = int(round(entry_cost * utilization_score / 100.0))
+            bonus = max(int(stats.clean_hits), 0) * max(int(settings.get("bonus_per_clean_hit", 0)), 0)
+            economy_summary.update({
+                "entry_cost": entry_cost,
+                "utilization_score": round(utilization_score, 1),
+                "refund": refund,
+                "bonus": bonus,
+                "value_lost": max(entry_cost - refund, 0),
+            })
         debug_summary = {
             "start_source": self.current_session_start_source,
             "capture_mode": str(getattr(self.input_timing, "capture_mode", "performance") or "performance"),
@@ -169,7 +204,7 @@ class SessionManager:
             "protocol_events_total": int((protocol_summary or {}).get("protocol_events_total", 0)),
             "current_diagonal_rule_mode": str((protocol_summary or {}).get("diagonal_rule_mode") or ""),
             "raw_events_compact": str(getattr(self.input_timing, "capture_mode", "performance") or "performance") == "performance",
-            "audit_version": "v0.21.11",
+            "audit_version": "v0.21.12",
         }
         input_payload = {
             "capture_mode": str(getattr(self.input_timing, "capture_mode", "performance") or "performance"),
@@ -254,14 +289,7 @@ class SessionManager:
                 for key, value in protocol_summary.items()
                 if key != "protocol_events"
             },
-            "economy_summary": {
-                "session_mode": result.session_mode,
-                "kcreds_earned": result.kcreds_earned,
-                "balance_before": result.balance_before,
-                "balance_after_earning": result.balance_after_earning,
-                "balance_final": result.balance_final,
-                "pending_purchase_enabled": result.session_mode == "deathmatch",
-            },
+            "economy_summary": dict((result.input_payload or {}).get("economy_summary", {})),
             "debug_summary": {
                 "start_source": self.current_session_start_source,
                 "capture_mode": str(getattr(self.input_timing, "capture_mode", "performance") or "performance"),
@@ -270,7 +298,7 @@ class SessionManager:
                 "protocol_events_total": int((protocol_summary or {}).get("protocol_events_total", len(protocol_events))),
                 "current_diagonal_rule_mode": self.tracker.current_diagonal_rule_mode,
                 "raw_events_compact": str(getattr(self.input_timing, "capture_mode", "performance") or "performance") == "performance",
-                "audit_version": "v0.21.11",
+                "audit_version": "v0.21.12",
             },
         }
 
@@ -301,6 +329,11 @@ class SessionManager:
             "require_release_at_click": bool(config.require_release_at_click),
             "auto_arm_enabled": bool(automation_settings.get("auto_arm_enabled", False)),
             "capture_enabled": bool(input_settings.get("enabled", True)),
+            "ranked_entry_cost": max(int((config.ranked_economy or {}).get("entry_cost", 0)), 0),
+            "ranked_bonus_per_clean_hit": max(
+                int((config.ranked_economy or {}).get("bonus_per_clean_hit", 0)),
+                0,
+            ),
             "shot_linked_window_ms": int(round(float(protocol_settings.get("shot_linked_window_seconds", 0.50)) * 1000)),
         }
 
@@ -311,11 +344,15 @@ class SessionManager:
             return None
 
         wallet = load_wallet()
-        wallet = buy_weapon_with_kcred(wallet, weapon)
-        register_weapon_purchase(weapon, self.last_finished_session.session_id, wallet["balance"])
+        owned = weapon["name"] in load_inventory().get("owned_weapons", [])
+        if owned:
+            equip_owned_weapon(weapon["name"])
+        else:
+            wallet = buy_weapon_with_kcred(wallet, weapon)
+            register_weapon_purchase(weapon, self.last_finished_session.session_id, wallet["balance"])
 
         self.last_finished_session.weapon_bought_next = weapon["name"]
-        self.last_finished_session.weapon_cost = weapon["cost"]
+        self.last_finished_session.weapon_cost = 0 if owned else weapon["cost"]
         self.last_finished_session.balance_final = wallet["balance"]
 
         wallet = append_session_to_wallet_history(wallet, self.last_finished_session)

@@ -48,7 +48,7 @@ def calculate_session_kcred_penalty(stats: Any, config: AppConfig | None = None)
 
 
 def apply_session_earning(wallet: dict, earned: int) -> tuple[dict, int, int]:
-    balance_before = int(wallet.get("balance", 0))
+    balance_before = max(int(wallet.get("balance", 0)), 0)
 
     wallet["balance"] = balance_before + earned
     wallet["total_earned"] = int(wallet.get("total_earned", 0)) + earned
@@ -63,11 +63,12 @@ def can_buy_weapon(wallet: dict, weapon: dict) -> bool:
 
 def buy_weapon(wallet: dict, weapon: dict) -> dict:
     cost = int(weapon.get("cost", 0))
+    balance = max(int(wallet.get("balance", 0)), 0)
 
-    if cost > int(wallet.get("balance", 0)):
+    if cost > balance:
         raise ValueError("Saldo insuficiente para comprar esta arma.")
 
-    wallet["balance"] = int(wallet.get("balance", 0)) - cost
+    wallet["balance"] = max(balance - cost, 0)
     wallet["total_spent"] = int(wallet.get("total_spent", 0)) + cost
     wallet["next_weapon"] = weapon.get("name", "Classic")
 

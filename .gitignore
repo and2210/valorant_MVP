@@ -7,15 +7,18 @@ venv/
 env/
 build/
 dist/
+logs/
 *.db
 *.sqlite
 *.sqlite3
+.pytest_cache/
 
 # Dados locais do Radiante
 data/
 
 # Config sensivel
 .env
+*.env
 
 # Logs e temporarios
 *.log
@@ -23,3 +26,5 @@ data/
 *.bak
 Thumbs.db
 *.spec
+data/input_audit/
+data/tracker_raw/

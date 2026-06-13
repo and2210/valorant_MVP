@@ -110,6 +110,10 @@ class AppConfig:
         "shot_linked_window_seconds": 0.50,
         "debug_event_limit": 12,
     })
+    ranked_economy: dict[str, Any] = field(default_factory=lambda: {
+        "entry_cost": 0,
+        "bonus_per_clean_hit": 0,
+    })
     input_timing: dict[str, Any] = field(default_factory=lambda: {
         "enabled": True,
         "capture_mode": "performance",
@@ -245,9 +249,7 @@ class AppConfig:
         normalized_input_timing.update(input_timing)
         normalized_input_timing["enabled"] = bool(normalized_input_timing.get("enabled", True))
         capture_mode = str(normalized_input_timing.get("capture_mode") or "performance").strip().lower()
-        if capture_mode not in {"performance", "full_audit", "off"}:
-            capture_mode = "performance"
-        normalized_input_timing["capture_mode"] = capture_mode
+        normalized_input_timing["capture_mode"] = "performance"
         normalized_input_timing["tap_max_seconds"] = max(_to_float(normalized_input_timing.get("tap_max_seconds"), 0.12), 0.01)
         normalized_input_timing["burst_max_seconds"] = max(_to_float(normalized_input_timing.get("burst_max_seconds"), 0.50), 0.05)
         normalized_input_timing["crouch_fire_max_seconds"] = max(_to_float(normalized_input_timing.get("crouch_fire_max_seconds"), 0.50), 0.05)
@@ -280,6 +282,20 @@ class AppConfig:
 
         normalized_input_timing["action_map"] = normalized_action_map
 
+        ranked_economy = data.get("ranked_economy", defaults.ranked_economy)
+        if not isinstance(ranked_economy, dict):
+            ranked_economy = defaults.ranked_economy
+        normalized_ranked_economy = dict(defaults.ranked_economy)
+        normalized_ranked_economy.update(ranked_economy)
+        normalized_ranked_economy["entry_cost"] = max(
+            _to_int(normalized_ranked_economy.get("entry_cost"), 0),
+            0,
+        )
+        normalized_ranked_economy["bonus_per_clean_hit"] = max(
+            _to_int(normalized_ranked_economy.get("bonus_per_clean_hit"), 0),
+            0,
+        )
+
         return cls(
             episode_timeout=_to_float(data.get("episode_timeout"), defaults.episode_timeout),
             post_click_cooldown=_to_float(data.get("post_click_cooldown"), defaults.post_click_cooldown),
@@ -299,6 +315,7 @@ class AppConfig:
             training_calendar=normalized_training_calendar,
             session_automation=normalized_session_automation,
             protocol=normalized_protocol,
+            ranked_economy=normalized_ranked_economy,
             input_timing=normalized_input_timing,
         )
 

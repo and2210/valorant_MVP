@@ -25,10 +25,12 @@ class HistoryScreen(QWidget):
 
         self.history_stack = QStackedWidget()
         self.history_buttons: list[QPushButton] = []
+        tracker_page = self._build_tracker_page()
+        training_page = self._build_training_sessions_page()
+        training_page.layout().addWidget(tracker_page)
         entries = [
             ("Calendar", self._build_calendar_page()),
-            ("Map Tracking", self._build_tracker_page()),
-            ("Training Sessions", self._build_training_sessions_page()),
+            ("Training Sessions", training_page),
             ("Ranked Matches", self._build_ranked_page()),
         ]
 
@@ -78,16 +80,6 @@ class HistoryScreen(QWidget):
         calendar_layout.addWidget(self.calendar_month_summary_label)
         calendar_layout.addWidget(self.calendar_goal_label)
 
-        navigation_group = QGroupBox("Open History Views")
-        navigation_layout = QGridLayout(navigation_group)
-        self.calendar_go_tracker_button = QPushButton("Map Tracking")
-        self.calendar_go_training_button = QPushButton("Training Sessions")
-        self.calendar_go_ranked_button = QPushButton("Ranked Matches")
-        navigation_layout.addWidget(self.calendar_go_tracker_button, 0, 0)
-        navigation_layout.addWidget(self.calendar_go_training_button, 0, 1)
-        navigation_layout.addWidget(self.calendar_go_ranked_button, 0, 2)
-        calendar_layout.addWidget(navigation_group)
-
         self.training_calendar_table = QTableWidget(6, 7)
         self.training_calendar_table.setHorizontalHeaderLabels(
             ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -131,7 +123,6 @@ class HistoryScreen(QWidget):
         actions.addWidget(self.import_day_button)
         actions.addWidget(self.import_range_button)
         actions.addStretch(1)
-        root.addLayout(actions)
 
         tracker_group = QGroupBox("Map Tracking")
         tracker_layout = QGridLayout(tracker_group)
@@ -204,7 +195,6 @@ class HistoryScreen(QWidget):
         actions.addWidget(self.import_ranked_day_button)
         actions.addWidget(self.import_ranked_range_button)
         actions.addStretch(1)
-        root.addLayout(actions)
 
         summary_group = QGroupBox("Ranked Matches")
         summary_layout = QGridLayout(summary_group)
