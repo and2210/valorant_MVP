@@ -41,6 +41,7 @@ from core.app_controller import AppController
 from core.input_timing import InputTimingTracker
 from core.config import CONFIG_FILE, DATA_DIR, PROJECT_ROOT, AppConfig, load_config, save_config
 from core.dashboard import DashboardStats
+from core.modules import FUTURE_MODULES
 from core.persistence import load_all_sessions
 from core.protocol_tracker import DIAGONAL_RULE_LABELS
 from core.runtime_identity import collect_runtime_identity
@@ -66,7 +67,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.21.15"
+    APP_VERSION = "v0.22.1"
 
     def __init__(self) -> None:
         super().__init__()
@@ -301,6 +302,14 @@ class MainWindow(QWidget):
         self.ranked_worst_map_label = screen.ranked_worst_map_label
         self.ranked_history_status_label = screen.ranked_history_status_label
         self.ranked_table = screen.ranked_table
+        self.hide_import_module_surfaces()
+
+    def hide_import_module_surfaces(self) -> None:
+        self.tracker_page.setVisible(False)
+        if len(self.history_buttons) > 2:
+            self.history_buttons[2].setVisible(False)
+        if self.history_stack.count() > 2:
+            self.history_stack.widget(2).setVisible(False)
 
     def _build_settings_shell(self) -> QWidget:
         page = QWidget()
@@ -308,8 +317,8 @@ class MainWindow(QWidget):
         root.addWidget(QLabel("Settings"))
         entries = [
             ("Keys / Input", self._make_scroll_page(self._build_keys_input_settings_page())),
-            ("Import", self._make_scroll_page(self._build_import_settings_page())),
             ("Overlay", self._make_scroll_page(self._build_overlay_settings_page())),
+            ("Modules / Extensions", self._make_scroll_page(self._build_modules_page())),
             ("Debug / Errors", self._make_scroll_page(self._build_debug_settings_page())),
             ("Runtime / About", self._make_scroll_page(self._build_runtime_identity_page())),
         ]
@@ -504,6 +513,27 @@ class MainWindow(QWidget):
         root = QVBoxLayout(page)
         root.addWidget(QLabel("Debug / Errors"))
         root.addWidget(self._build_protocol_debug_group())
+        root.addStretch(1)
+        return page
+
+    def _build_modules_page(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        root.addWidget(QLabel("Modules / Extensions"))
+
+        for app_module in FUTURE_MODULES:
+            group = QGroupBox(app_module.name)
+            layout = QGridLayout(group)
+            status_label = QLabel(app_module.status)
+            status_label.setObjectName("ModuleStatusLabel")
+            description_label = QLabel(app_module.description)
+            description_label.setWordWrap(True)
+            layout.addWidget(QLabel("Status:"), 0, 0)
+            layout.addWidget(status_label, 0, 1)
+            layout.addWidget(description_label, 1, 0, 1, 2)
+            group.setEnabled(False)
+            root.addWidget(group)
+
         root.addStretch(1)
         return page
 
@@ -705,6 +735,8 @@ class MainWindow(QWidget):
         info_bar = QFrame()
         info_bar.setObjectName("ImportStatusBar")
         info_bar.setMaximumHeight(54)
+        info_bar.setVisible(False)
+        self.import_status_bar = info_bar
         info_layout = QHBoxLayout(info_bar)
         info_layout.setContentsMargins(8, 4, 8, 4)
         self.info_tracker_label = QLabel("Imports: idle")
@@ -892,12 +924,15 @@ class MainWindow(QWidget):
         self.prev_month_button.clicked.connect(self.show_previous_month)
         self.today_month_button.clicked.connect(self.show_current_month)
         self.next_month_button.clicked.connect(self.show_next_month)
-        self.import_training_calendar_button.clicked.connect(self.import_training_calendar_csv)
-        self.export_training_calendar_button.clicked.connect(self.export_current_month_calendar)
+        if hasattr(self, "import_training_calendar_button"):
+            self.import_training_calendar_button.clicked.connect(self.import_training_calendar_csv)
+        if hasattr(self, "export_training_calendar_button"):
+            self.export_training_calendar_button.clicked.connect(self.export_current_month_calendar)
         self.save_settings_button.clicked.connect(self.save_quick_settings)
         self.reload_settings_button.clicked.connect(self.reload_quick_settings)
         self.reset_settings_button.clicked.connect(self.reset_quick_settings_to_defaults)
-        self.setting_show_api_key.toggled.connect(self.toggle_api_key_visibility)
+        if hasattr(self, "setting_show_api_key"):
+            self.setting_show_api_key.toggled.connect(self.toggle_api_key_visibility)
         self.setting_capture_mode.currentIndexChanged.connect(self.refresh_capture_mode_warning)
         self.setting_overlay_enabled.toggled.connect(self.apply_overlay_settings)
         self.setting_overlay_opacity.valueChanged.connect(self.apply_overlay_settings)
@@ -951,11 +986,15 @@ class MainWindow(QWidget):
             widget.setCurrentIndex(index)
 
     def toggle_api_key_visibility(self, checked: bool) -> None:
+        if not hasattr(self, "setting_api_key"):
+            return
         self.setting_api_key.setEchoMode(
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
         )
 
     def refresh_api_key_status(self) -> None:
+        if not hasattr(self, "setting_api_key"):
+            return
         config_key = self.setting_api_key.text().strip()
         active_settings = get_tracker_settings()
         if config_key:
@@ -1011,19 +1050,20 @@ class MainWindow(QWidget):
             self.setting_medium_day.setValue(float(calendar_settings.get("medium_day_hours", 1.0)))
             self.setting_strong_day.setValue(float(calendar_settings.get("strong_day_hours", 2.0)))
 
-        tracker_settings = dict(config.tracker or {})
-        self.setting_riot_name.setText(str(tracker_settings.get("riot_name", "")))
-        self.setting_riot_tag.setText(str(tracker_settings.get("riot_tag", "")))
-        self.setting_region.setText(str(tracker_settings.get("region", "br")))
-        self.setting_platform.setText(str(tracker_settings.get("platform", "pc")))
-        self.setting_api_key.setText(str(tracker_settings.get("api_key", "")))
-        self.setting_show_api_key.setChecked(False)
-        self.toggle_api_key_visibility(False)
-        self.refresh_api_key_status()
-        self.setting_import_limit.setValue(int(tracker_settings.get("import_limit", 20)))
-        self.setting_max_scan.setValue(int(tracker_settings.get("max_scan_matches", 2500)))
-        self.setting_request_delay.setValue(float(tracker_settings.get("request_delay_seconds", 1.5)))
-        self.setting_ranked_detail_enrichment.setChecked(bool(tracker_settings.get("ranked_detail_enrichment", True)))
+        if hasattr(self, "setting_riot_name"):
+            tracker_settings = dict(config.tracker or {})
+            self.setting_riot_name.setText(str(tracker_settings.get("riot_name", "")))
+            self.setting_riot_tag.setText(str(tracker_settings.get("riot_tag", "")))
+            self.setting_region.setText(str(tracker_settings.get("region", "br")))
+            self.setting_platform.setText(str(tracker_settings.get("platform", "pc")))
+            self.setting_api_key.setText(str(tracker_settings.get("api_key", "")))
+            self.setting_show_api_key.setChecked(False)
+            self.toggle_api_key_visibility(False)
+            self.refresh_api_key_status()
+            self.setting_import_limit.setValue(int(tracker_settings.get("import_limit", 20)))
+            self.setting_max_scan.setValue(int(tracker_settings.get("max_scan_matches", 2500)))
+            self.setting_request_delay.setValue(float(tracker_settings.get("request_delay_seconds", 1.5)))
+            self.setting_ranked_detail_enrichment.setChecked(bool(tracker_settings.get("ranked_detail_enrichment", True)))
         self.setting_overlay_enabled.setChecked(bool(config.overlay_enabled))
         self.setting_overlay_opacity.setValue(float(config.overlay_opacity))
         self.setting_overlay_scale.setValue(float(config.overlay_scale))
@@ -1036,17 +1076,18 @@ class MainWindow(QWidget):
         current = self.app_config
 
         tracker_settings = dict(current.tracker or {})
-        tracker_settings.update({
-            "riot_name": self.setting_riot_name.text().strip(),
-            "riot_tag": self.setting_riot_tag.text().strip(),
-            "region": self.setting_region.text().strip() or "br",
-            "platform": self.setting_platform.text().strip() or "pc",
-            "api_key": self.setting_api_key.text().strip(),
-            "import_limit": self.setting_import_limit.value(),
-            "max_scan_matches": self.setting_max_scan.value(),
-            "request_delay_seconds": self.setting_request_delay.value(),
-            "ranked_detail_enrichment": self.setting_ranked_detail_enrichment.isChecked(),
-        })
+        if hasattr(self, "setting_riot_name"):
+            tracker_settings.update({
+                "riot_name": self.setting_riot_name.text().strip(),
+                "riot_tag": self.setting_riot_tag.text().strip(),
+                "region": self.setting_region.text().strip() or "br",
+                "platform": self.setting_platform.text().strip() or "pc",
+                "api_key": self.setting_api_key.text().strip(),
+                "import_limit": self.setting_import_limit.value(),
+                "max_scan_matches": self.setting_max_scan.value(),
+                "request_delay_seconds": self.setting_request_delay.value(),
+                "ranked_detail_enrichment": self.setting_ranked_detail_enrichment.isChecked(),
+            })
 
         calendar_settings = dict(current.training_calendar or {})
         if hasattr(self, "setting_daily_goal"):

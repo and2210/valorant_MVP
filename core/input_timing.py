@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 
 from core.config import AppConfig, FORWARD_KEYS, LATERAL_KEYS, MOVEMENT_KEYS, load_config
+from core.input_actions import InputAction, InputActionCatalog, legacy_action
+from core.training_state import TrainingStateMachine
 
 
 @dataclass
@@ -94,6 +96,7 @@ class InputTimingStats:
     forward_seconds: float = 0.0
     lateral_seconds: float = 0.0
     active_state_snapshot: dict[str, bool] = field(default_factory=dict)
+    training_state_snapshot: dict[str, Any] = field(default_factory=dict)
     action_counts: dict[str, int] = field(default_factory=dict)
     raw_events_total: int = 0
     raw_events: list[dict[str, Any]] = field(default_factory=list)
@@ -132,6 +135,8 @@ class InputTimingTracker:
         self.settings = dict(self.config.input_timing)
         self.capture_mode = self._read_capture_mode()
         self.action_map = self._normalize_action_map(self.settings.get("action_map", {}))
+        self.action_catalog = InputActionCatalog.from_action_map(self.action_map)
+        self.training_state = TrainingStateMachine()
         self.enabled = False
         self.active_state: dict[str, ActiveInputState] = {}
         self.last_release_times: dict[str, float] = {}
@@ -235,6 +240,7 @@ class InputTimingTracker:
         self.settings = dict(self.config.input_timing)
         self.capture_mode = self._read_capture_mode()
         self.action_map = self._normalize_action_map(self.settings.get("action_map", {}))
+        self.action_catalog = InputActionCatalog.from_action_map(self.action_map)
         self.reset()
         self.enabled = bool(self.settings.get("enabled", True)) and self.capture_mode != "off"
         self.last_state_update = time.monotonic()
@@ -250,6 +256,7 @@ class InputTimingTracker:
         self.stats.raw_events_total = int(self.raw_events_total)
         self.stats.raw_events = self.raw_events_to_dicts()
         self.stats.active_state_snapshot = self._active_state_snapshot()
+        self.stats.training_state_snapshot = self.training_state.snapshot(now).to_dict()
         self.enabled = False
         self.diagonal_active = False
         return self.stats
@@ -257,14 +264,18 @@ class InputTimingTracker:
     def reset(self) -> None:
         self.settings = dict(self.config.input_timing)
         self.capture_mode = self._read_capture_mode()
+        self.action_map = self._normalize_action_map(self.settings.get("action_map", {}))
+        self.action_catalog = InputActionCatalog.from_action_map(self.action_map)
         self.active_state = {}
         self.last_release_times = {}
         self.intervals = []
         self._reset_raw_event_buffer()
         self.raw_events_total = 0
         self.stats = InputTimingStats()
-        self.stats.active_state_snapshot = self._active_state_snapshot()
         self.last_state_update = time.monotonic()
+        self.stats.active_state_snapshot = self._active_state_snapshot()
+        self.training_state.reset()
+        self.stats.training_state_snapshot = self.training_state.snapshot(self.last_state_update).to_dict()
         self.diagonal_active = False
         self.last_diagonal_entry_at = 0.0
         self.jump_window_until = 0.0
@@ -280,6 +291,7 @@ class InputTimingTracker:
         self.stats.raw_events_total = int(self.raw_events_total)
         self.stats.raw_events = []
         self.stats.active_state_snapshot = self._active_state_snapshot()
+        self.stats.training_state_snapshot = self.training_state.snapshot(now).to_dict()
         return self.stats
 
     def active_input_ids(self) -> set[str]:
@@ -290,6 +302,10 @@ class InputTimingTracker:
 
     def active_state_snapshot(self) -> dict[str, bool]:
         return self._active_state_snapshot()
+
+    def training_state_snapshot(self) -> dict[str, Any]:
+        now = time.monotonic()
+        return self.training_state.snapshot(now).to_dict()
 
     def has_forward(self) -> bool:
         return bool(self.active_actions().intersection(self.FORWARD_ACTIONS))
@@ -347,9 +363,10 @@ class InputTimingTracker:
             return
 
         input_id = self.normalize_input_id(raw_key)
-        action = self.action_map.get(input_id)
-        if not action:
+        action_definition = self._resolve_action(input_id)
+        if action_definition is None:
             return
+        action = legacy_action(action_definition.action)
 
         now = time.monotonic()
         self._update_continuous_state(now)
@@ -359,6 +376,7 @@ class InputTimingTracker:
             return
 
         self.active_state[input_id] = ActiveInputState(input_id=input_id, action=action, started_at=now)
+        self.training_state.process(action=action_definition, event_type="key_down", monotonic_timestamp=now)
         self._record_raw_event("key_down", input_id, action, now)
         self.stats.key_presses += 1
         self.stats.useful_key_presses += 1
@@ -370,9 +388,10 @@ class InputTimingTracker:
             return
 
         input_id = self.normalize_input_id(raw_key)
-        action = self.action_map.get(input_id)
-        if not action:
+        action_definition = self._resolve_action(input_id)
+        if action_definition is None:
             return
+        action = legacy_action(action_definition.action)
 
         now = time.monotonic()
         self._update_continuous_state(now)
@@ -385,6 +404,7 @@ class InputTimingTracker:
 
         self.jump_window_tracked_keys.discard(input_id)
         self.last_release_times[input_id] = now
+        self.training_state.process(action=action_definition, event_type="key_up", monotonic_timestamp=now)
         self._record_raw_event("key_up", input_id, action, now, now - state.started_at)
         self._complete_interval(input_id, action, state.started_at, now)
 
@@ -393,9 +413,10 @@ class InputTimingTracker:
             return
 
         input_id = self.normalize_input_id(button_name)
-        action = self.action_map.get(input_id)
-        if not action:
+        action_definition = self._resolve_action(input_id)
+        if action_definition is None:
             return
+        action = legacy_action(action_definition.action)
 
         now = time.monotonic()
         self._update_continuous_state(now)
@@ -406,6 +427,7 @@ class InputTimingTracker:
                 return
 
             self.active_state[input_id] = ActiveInputState(input_id=input_id, action=action, started_at=now)
+            self.training_state.process(action=action_definition, event_type="mouse_down", monotonic_timestamp=now)
             self._record_raw_event("mouse_down", input_id, action, now)
             self.stats.mouse_presses += 1
             self._register_action_count(action)
@@ -426,6 +448,7 @@ class InputTimingTracker:
         if action == "fire":
             self.stats.lmb_up_count += 1
 
+        self.training_state.process(action=action_definition, event_type="mouse_up", monotonic_timestamp=now)
         self._record_raw_event("mouse_up", input_id, action, now, now - state.started_at)
         self._complete_interval(input_id, action, state.started_at, now)
 
@@ -434,12 +457,14 @@ class InputTimingTracker:
             return
 
         input_id = self.normalize_input_id(direction)
-        action = self.action_map.get(input_id)
-        if not action:
+        action_definition = self._resolve_action(input_id)
+        if action_definition is None:
             return
+        action = legacy_action(action_definition.action)
 
         now = time.monotonic()
         self._update_continuous_state(now)
+        self.training_state.process(action=action_definition, event_type="scroll", monotonic_timestamp=now)
         self._record_raw_event("scroll", input_id, action, now)
         self.stats.scroll_events += 1
 
@@ -518,6 +543,9 @@ class InputTimingTracker:
         self.stats.action_counts[action] = self.stats.action_counts.get(action, 0) + 1
         return True
 
+    def _resolve_action(self, input_id: str) -> InputAction | None:
+        return self.action_catalog.resolve(input_id)
+
     def _record_raw_event(
         self,
         event_type: str,
@@ -540,6 +568,7 @@ class InputTimingTracker:
         self.raw_events.append(event)
         self.stats.raw_events_total = int(self.raw_events_total)
         self.stats.active_state_snapshot = dict(event.active_state)
+        self.stats.training_state_snapshot = self.training_state.snapshot(monotonic_timestamp).to_dict()
 
     def _complete_interval(self, input_id: str, action: str, started_at: float, finished_at: float) -> None:
         duration = max(finished_at - started_at, 0.0)

@@ -79,6 +79,10 @@ class AppController:
         return self.input_timing.snapshot()
 
     @property
+    def training_state_snapshot(self) -> dict[str, Any]:
+        return self.input_timing.training_state_snapshot()
+
+    @property
     def live_protocol_events(self) -> list[dict[str, Any]]:
         return list(self.tracker.recent_protocol_events())
 
@@ -121,6 +125,7 @@ class AppController:
             "session_active": self.is_session_active,
             "session_mode": self.current_session_mode,
             "input_state": dict(input_stats.active_state_snapshot or {}),
+            "training_state": dict(input_stats.training_state_snapshot or {}),
             "scroll_events": int(input_stats.scroll_events),
             "scroll_jump_events": int(input_stats.scroll_jump_events),
         }
