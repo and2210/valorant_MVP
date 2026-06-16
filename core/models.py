@@ -77,12 +77,12 @@ class DMResult:
     def has_attempts(self) -> bool:
         return self.valid_attempts > 0
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["datetime"] = self.datetime
         return data
 
-    def to_wallet_history_dict(self) -> dict:
+    def to_wallet_history_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
             "time": self.datetime,
@@ -124,7 +124,7 @@ class DMResult:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "DMResult":
+    def from_dict(cls, data: dict[str, Any]) -> "DMResult":
         finished_at = data.get("finished_at") or data.get("datetime") or data.get("time") or ""
         started_at = data.get("started_at") or finished_at
 

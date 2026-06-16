@@ -147,7 +147,7 @@ class InputTimingTracker:
     RECENT_FORWARD_RELEASE_SECONDS = 0.50
     LONG_LATERAL_HOLD_SECONDS = 0.45
     WARNING_LATCH_SECONDS = 1.20
-    BRAKE_EXPECTATION_WINDOW_SECONDS = 0.12
+    BRAKE_EXPECTATION_WINDOW_SECONDS = 0.18
 
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or load_config()
@@ -768,22 +768,6 @@ class InputTimingTracker:
     def _note_brake_release(self, input_id: str, now: float) -> None:
         if input_id not in LATERAL_KEYS:
             return
-
-        # If this key release is the release of the expected brake key from
-        # the current brake window, do not open a new missed-brake window.
-        #
-        # Example:
-        # A down -> A up -> D down -> D up -> LMB
-        #
-        # D was already used as the expected brake, so D up must not create
-        # a new window expecting A.
-        if self.pending_brake_window:
-            expected_key = str(self.pending_brake_window.get("expected_key") or "")
-            opposite_pressed = bool(self.pending_brake_window.get("opposite_pressed", False))
-            if input_id == expected_key and opposite_pressed:
-                self.pending_brake_window = None
-                return
-
         expected_key = "d" if input_id == "a" else "a"
         self.pending_brake_window = {
             "released_key": input_id,
@@ -815,12 +799,9 @@ class InputTimingTracker:
     def _evaluate_brake_opportunity(self, now: float, fire_state: str) -> None:
         if not self.pending_brake_window:
             return
-
         self._expire_brake_window(now)
-
         if not self.pending_brake_window:
             return
-
         if bool(self.pending_brake_window.get("consumed", False)):
             return
 
@@ -832,15 +813,12 @@ class InputTimingTracker:
         self.stats.brake_opportunity_count += 1
         self.stats.last_expected_brake_key = expected_key
         self.stats.last_release_to_fire_ms = int(round(max(now - released_at, 0.0) * 1000))
-
         if opposite_pressed:
-            if fire_state == "braking":
-                self.stats.unstable_brake_count += 1
-        else:
             if fire_state != "braking":
-                self.stats.missed_brake_count += 1
-                self.stats.last_missed_brake_direction = "left" if released_key == "a" else "right"
-
+                self.stats.unstable_brake_count += 1
+        elif fire_state != "braking":
+            self.stats.missed_brake_count += 1
+            self.stats.last_missed_brake_direction = "left" if released_key == "a" else "right"
         self.pending_brake_window["consumed"] = True
 
     def _calculate_diagonal_pressure(self, now: float) -> float:
