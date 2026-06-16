@@ -114,6 +114,13 @@ class AppConfig:
         "entry_cost": 0,
         "bonus_per_clean_hit": 0,
     })
+    overlay_enabled: bool = False
+    overlay_opacity: float = 0.85
+    overlay_position: str = "top_right"
+    overlay_scale: float = 1.0
+    overlay_click_through: bool = False
+    overlay_always_on_top: bool = True
+    overlay_minimal_mode: bool = False
     input_timing: dict[str, Any] = field(default_factory=lambda: {
         "enabled": True,
         "capture_mode": "performance",
@@ -296,6 +303,17 @@ class AppConfig:
             0,
         )
 
+        valid_overlay_positions = {
+            "top_left",
+            "top_right",
+            "bottom_left",
+            "bottom_right",
+            "center_top",
+        }
+        overlay_position = str(data.get("overlay_position") or defaults.overlay_position).strip()
+        if overlay_position not in valid_overlay_positions:
+            overlay_position = defaults.overlay_position
+
         return cls(
             episode_timeout=_to_float(data.get("episode_timeout"), defaults.episode_timeout),
             post_click_cooldown=_to_float(data.get("post_click_cooldown"), defaults.post_click_cooldown),
@@ -316,6 +334,25 @@ class AppConfig:
             session_automation=normalized_session_automation,
             protocol=normalized_protocol,
             ranked_economy=normalized_ranked_economy,
+            overlay_enabled=bool(data.get("overlay_enabled", defaults.overlay_enabled)),
+            overlay_opacity=min(
+                max(_to_float(data.get("overlay_opacity"), defaults.overlay_opacity), 0.20),
+                1.0,
+            ),
+            overlay_position=overlay_position,
+            overlay_scale=min(
+                max(_to_float(data.get("overlay_scale"), defaults.overlay_scale), 0.75),
+                1.50,
+            ),
+            overlay_click_through=bool(
+                data.get("overlay_click_through", defaults.overlay_click_through)
+            ),
+            overlay_always_on_top=bool(
+                data.get("overlay_always_on_top", defaults.overlay_always_on_top)
+            ),
+            overlay_minimal_mode=bool(
+                data.get("overlay_minimal_mode", defaults.overlay_minimal_mode)
+            ),
             input_timing=normalized_input_timing,
         )
 

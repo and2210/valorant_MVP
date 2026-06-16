@@ -614,5 +614,7 @@ class InputTimingTracker:
             "d": "d" in active_ids,
             "ctrl": "ctrl" in active_ids,
             "shift": "shift" in active_ids,
+            "space": "space" in active_ids,
             "mouse_left": "mouse_left" in active_ids,
+            "mouse_right": "mouse_right" in active_ids,
         }

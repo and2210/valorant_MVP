@@ -25,9 +25,9 @@ class HistoryScreen(QWidget):
 
         self.history_stack = QStackedWidget()
         self.history_buttons: list[QPushButton] = []
-        tracker_page = self._build_tracker_page()
+        self.tracker_page = self._build_tracker_page()
         training_page = self._build_training_sessions_page()
-        training_page.layout().addWidget(tracker_page)
+        training_page.layout().addWidget(self.tracker_page)
         entries = [
             ("Calendar", self._build_calendar_page()),
             ("Training Sessions", training_page),

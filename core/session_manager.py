@@ -204,7 +204,7 @@ class SessionManager:
             "protocol_events_total": int((protocol_summary or {}).get("protocol_events_total", 0)),
             "current_diagonal_rule_mode": str((protocol_summary or {}).get("diagonal_rule_mode") or ""),
             "raw_events_compact": str(getattr(self.input_timing, "capture_mode", "performance") or "performance") == "performance",
-            "audit_version": "v0.21.12",
+            "audit_version": "v0.21.13",
         }
         input_payload = {
             "capture_mode": str(getattr(self.input_timing, "capture_mode", "performance") or "performance"),
@@ -298,7 +298,7 @@ class SessionManager:
                 "protocol_events_total": int((protocol_summary or {}).get("protocol_events_total", len(protocol_events))),
                 "current_diagonal_rule_mode": self.tracker.current_diagonal_rule_mode,
                 "raw_events_compact": str(getattr(self.input_timing, "capture_mode", "performance") or "performance") == "performance",
-                "audit_version": "v0.21.12",
+                "audit_version": "v0.21.13",
             },
         }
 

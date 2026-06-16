@@ -115,6 +115,16 @@ class AppController:
     def current_session_config_snapshot(self) -> dict[str, Any]:
         return dict(self.session_manager.current_session_config_snapshot or {})
 
+    def get_overlay_snapshot(self) -> dict[str, Any]:
+        input_stats = self.input_timing.snapshot()
+        return {
+            "session_active": self.is_session_active,
+            "session_mode": self.current_session_mode,
+            "input_state": dict(input_stats.active_state_snapshot or {}),
+            "scroll_events": int(input_stats.scroll_events),
+            "scroll_jump_events": int(input_stats.scroll_jump_events),
+        }
+
     def sync_state(self) -> AppState:
         self.state.is_session_active = self.is_session_active
         self.state.has_pending_purchase = self.has_pending_purchase

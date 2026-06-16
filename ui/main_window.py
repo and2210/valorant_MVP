@@ -52,6 +52,7 @@ from core.tracker_importer import (
 )
 from ui.screens.history_screen import HistoryScreen
 from ui.screens.inventory_screen import InventoryScreen
+from ui.overlay_window import OverlayWindow
 
 
 class GuiSignals(QObject):
@@ -64,7 +65,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.21.12"
+    APP_VERSION = "v0.21.14"
 
     def __init__(self) -> None:
         super().__init__()
@@ -83,8 +84,10 @@ class MainWindow(QWidget):
         self.weapon_selection_counts: dict[str, int] = {}
 
         self._build_ui()
+        self.overlay_window = OverlayWindow(self.controller.get_overlay_snapshot)
         self._connect_signals()
         self.load_settings_into_form(self.app_config)
+        self.apply_overlay_settings()
         self._start_input_listeners()
 
         self.live_timer = QTimer(self)
@@ -99,8 +102,11 @@ class MainWindow(QWidget):
 
     def _build_main_menu(self) -> QWidget:
         panel = QWidget()
-        panel.setMinimumWidth(180)
+        panel.setMinimumWidth(150)
+        panel.setMaximumWidth(190)
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 8, 0)
+        layout.setSpacing(6)
         layout.addWidget(QLabel("Main Menu"))
 
         self.main_menu_buttons: dict[str, QPushButton] = {}
@@ -185,7 +191,7 @@ class MainWindow(QWidget):
             self._set_subpage(self.history_stack, 0, self.history_buttons)
 
     def _build_game_modes_shell(self) -> QWidget:
-        return self._build_section_shell(
+        page = self._build_section_shell(
             "Game Modes",
             [
                 ("Deathmatch", self._build_dm_tab()),
@@ -193,6 +199,13 @@ class MainWindow(QWidget):
             ],
             "game_modes",
         )
+        self.game_modes_buttons[0].clicked.connect(
+            lambda _checked=False: self.select_game_mode("deathmatch")
+        )
+        self.game_modes_buttons[1].clicked.connect(
+            lambda _checked=False: self.select_game_mode("ranked")
+        )
+        return page
 
     def _build_inventory_shell(self) -> QWidget:
         self.inventory_screen = InventoryScreen()
@@ -240,6 +253,7 @@ class MainWindow(QWidget):
     def _bind_history_screen_widgets(self, screen: HistoryScreen) -> None:
         self.history_stack = screen.history_stack
         self.history_buttons = screen.history_buttons
+        self.tracker_page = screen.tracker_page
         self.prev_month_button = screen.prev_month_button
         self.calendar_month_label = screen.calendar_month_label
         self.today_month_button = screen.today_month_button
@@ -291,9 +305,10 @@ class MainWindow(QWidget):
         root = QVBoxLayout(page)
         root.addWidget(QLabel("Settings"))
         entries = [
-            ("Keys / Input", self._build_keys_input_settings_page()),
-            ("Import", self._build_import_settings_page()),
-            ("Debug / Errors", self._build_debug_settings_page()),
+            ("Keys / Input", self._make_scroll_page(self._build_keys_input_settings_page())),
+            ("Import", self._make_scroll_page(self._build_import_settings_page())),
+            ("Overlay", self._make_scroll_page(self._build_overlay_settings_page())),
+            ("Debug / Errors", self._make_scroll_page(self._build_debug_settings_page())),
         ]
 
         buttons_layout = QHBoxLayout()
@@ -331,6 +346,15 @@ class MainWindow(QWidget):
 
         self._set_subpage(self.settings_stack, 0, self.settings_buttons)
         return page
+
+    @staticmethod
+    def _make_scroll_page(content: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(content)
+        return scroll
 
     def _build_live_session_group(self) -> QGroupBox:
         live_group = QGroupBox("Current Session")
@@ -419,14 +443,16 @@ class MainWindow(QWidget):
         root.addWidget(self._build_match_import_group("Deathmatch", ranked=False))
         root.addWidget(self._build_match_import_group("Ranked", ranked=True))
         calendar_group = QGroupBox("Training Calendar")
-        calendar_layout = QHBoxLayout(calendar_group)
+        calendar_layout = QGridLayout(calendar_group)
         self.import_training_calendar_button = QPushButton("Import Training Calendar CSV")
         self.export_training_calendar_button = QPushButton("Export Training Calendar CSV")
         calendar_note = QLabel("Use CSV tools here. The live History calendar still reflects local session and match data.")
         calendar_note.setWordWrap(True)
-        calendar_layout.addWidget(self.import_training_calendar_button)
-        calendar_layout.addWidget(self.export_training_calendar_button)
-        calendar_layout.addWidget(calendar_note, stretch=1)
+        calendar_layout.addWidget(self.import_training_calendar_button, 0, 0)
+        calendar_layout.addWidget(self.export_training_calendar_button, 0, 1)
+        calendar_layout.addWidget(calendar_note, 1, 0, 1, 2)
+        calendar_layout.setColumnStretch(0, 1)
+        calendar_layout.setColumnStretch(1, 1)
         root.addWidget(calendar_group)
         root.addStretch(1)
         return page
@@ -462,6 +488,8 @@ class MainWindow(QWidget):
         layout.addWidget(QLabel("To:"), 2, 2)
         layout.addWidget(to_date, 2, 3)
         layout.addWidget(action, 3, 0, 1, 2)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(3, 1)
         mode.currentIndexChanged.connect(
             lambda _=0, is_ranked=ranked: self.refresh_import_mode(is_ranked)
         )
@@ -476,9 +504,59 @@ class MainWindow(QWidget):
         root.addStretch(1)
         return page
 
+    def _build_overlay_settings_page(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        root.addWidget(QLabel("Training Overlay"))
+
+        group = QGroupBox("Overlay")
+        form = QFormLayout(group)
+        self.setting_overlay_enabled = QCheckBox("Show the training overlay")
+        self.setting_overlay_opacity = QDoubleSpinBox()
+        self.setting_overlay_opacity.setRange(0.20, 1.00)
+        self.setting_overlay_opacity.setSingleStep(0.05)
+        self.setting_overlay_opacity.setDecimals(2)
+        self.setting_overlay_scale = QDoubleSpinBox()
+        self.setting_overlay_scale.setRange(0.75, 1.50)
+        self.setting_overlay_scale.setSingleStep(0.05)
+        self.setting_overlay_scale.setDecimals(2)
+        self.setting_overlay_position = QComboBox()
+        self.setting_overlay_position.addItem("Top left", "top_left")
+        self.setting_overlay_position.addItem("Top right", "top_right")
+        self.setting_overlay_position.addItem("Bottom left", "bottom_left")
+        self.setting_overlay_position.addItem("Bottom right", "bottom_right")
+        self.setting_overlay_position.addItem("Center top", "center_top")
+        self.setting_overlay_click_through = QCheckBox(
+            "Allow clicks to pass through the overlay"
+        )
+        self.setting_overlay_always_on_top = QCheckBox("Keep overlay always on top")
+        self.setting_overlay_minimal = QCheckBox("Hide compact status text")
+        self.overlay_toggle_button = QPushButton("Show / Hide Overlay")
+
+        form.addRow("Enabled:", self.setting_overlay_enabled)
+        form.addRow("Opacity:", self.setting_overlay_opacity)
+        form.addRow("Scale:", self.setting_overlay_scale)
+        form.addRow("Position:", self.setting_overlay_position)
+        form.addRow("Click-through:", self.setting_overlay_click_through)
+        form.addRow("Always on top:", self.setting_overlay_always_on_top)
+        form.addRow("Minimal mode:", self.setting_overlay_minimal)
+        form.addRow("", self.overlay_toggle_button)
+        root.addWidget(group)
+
+        note = QLabel(
+            "The overlay displays only Radiante Daily session and input state. "
+            "It does not inspect, attach to, or control the game."
+        )
+        note.setWordWrap(True)
+        root.addWidget(note)
+        root.addStretch(1)
+        return page
+
     def _build_protocol_settings_group(self) -> QGroupBox:
         protocol_group = QGroupBox("Protocol and Session")
         protocol_form = QFormLayout(protocol_group)
+        protocol_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        protocol_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.setting_episode_timeout = self.make_seconds_spin(0.10, 10.00)
         self.setting_click_cooldown = self.make_seconds_spin(0.00, 5.00)
         self.setting_stationary_clean = QCheckBox("Count a standing click as a clean hit")
@@ -506,6 +584,8 @@ class MainWindow(QWidget):
     def _build_input_settings_group(self) -> QGroupBox:
         input_group = QGroupBox("Input Timing")
         input_form = QFormLayout(input_group)
+        input_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        input_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.setting_input_enabled = QCheckBox("Track key, mouse, and scroll duration")
         self.setting_capture_mode = QComboBox()
         self.setting_capture_mode.addItem("Performance", "performance")
@@ -524,6 +604,8 @@ class MainWindow(QWidget):
     def _build_tracker_settings_group(self) -> QGroupBox:
         tracker_group = QGroupBox("Import Settings")
         tracker_form = QFormLayout(tracker_group)
+        tracker_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        tracker_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.setting_riot_name = QLineEdit()
         self.setting_riot_tag = QLineEdit()
         self.setting_region = QLineEdit()
@@ -551,25 +633,27 @@ class MainWindow(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(8)
 
-        title = QLabel("MVP APP — Valorant Training / Coins")
+        header = QHBoxLayout()
+        title = QLabel(f"MVP APP {self.APP_VERSION} - Valorant Training / Coins")
         title.setObjectName("TitleLabel")
-        root.addWidget(title)
-
         self.status_label = QLabel("Status: Manual")
-        root.addWidget(self.status_label)
+        self.status_label.setObjectName("StatusLabel")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self.status_label)
+        root.addLayout(header)
 
         button_row = QHBoxLayout()
-        self.session_mode_combo = QComboBox()
-        self.session_mode_combo.addItem("Deathmatch (Coins)", "deathmatch")
-        self.session_mode_combo.addItem("Ranked (audit only)", "ranked")
+        button_row.setSpacing(6)
         self.start_button = QPushButton("Start Session (F10)")
         self.finish_button = QPushButton("Stop Session (F10)")
         self.reset_button = QPushButton("Reset Counters (F9)")
         self.refresh_button = QPushButton("Refresh (F6)")
         self.finish_button.setEnabled(False)
-        button_row.addWidget(QLabel("Mode:"))
-        button_row.addWidget(self.session_mode_combo)
         button_row.addWidget(self.start_button)
         button_row.addWidget(self.finish_button)
         button_row.addWidget(self.reset_button)
@@ -578,31 +662,38 @@ class MainWindow(QWidget):
         root.addLayout(button_row)
 
         shell_layout = QHBoxLayout()
+        shell_layout.setSpacing(8)
         shell_layout.addWidget(self._build_main_menu(), stretch=0)
         shell_layout.addWidget(self._build_main_content_stack(), stretch=1)
         root.addLayout(shell_layout, stretch=1)
 
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        root.addWidget(line)
-
-        info_group = QGroupBox("Import Status")
-        info_layout = QHBoxLayout(info_group)
+        info_bar = QFrame()
+        info_bar.setObjectName("ImportStatusBar")
+        info_bar.setMaximumHeight(54)
+        info_layout = QHBoxLayout(info_bar)
+        info_layout.setContentsMargins(8, 4, 8, 4)
         self.info_tracker_label = QLabel("Imports: idle")
         self.info_tracker_progress_bar = QProgressBar()
         self.info_tracker_progress_bar.setRange(0, 1000)
         self.info_tracker_progress_bar.setValue(0)
         self.info_tracker_progress_bar.setFormat("0.0%")
+        info_layout.addWidget(QLabel("Import Status:"))
         info_layout.addWidget(self.info_tracker_label)
         info_layout.addWidget(self.info_tracker_progress_bar, stretch=1)
-        root.addWidget(info_group)
+        root.addWidget(info_bar)
 
         self.setStyleSheet(
             """
             QLabel#TitleLabel {
                 font-size: 20px;
                 font-weight: bold;
+            }
+            QLabel#StatusLabel {
+                color: #94A3B8;
+                font-weight: bold;
+            }
+            QFrame#ImportStatusBar {
+                border-top: 1px solid rgba(148, 163, 184, 90);
             }
             QGroupBox {
                 font-weight: bold;
@@ -757,7 +848,6 @@ class MainWindow(QWidget):
         self.confirm_sell_button.clicked.connect(self.confirm_sell)
         self.clear_selection_button.clicked.connect(self.clear_weapon_selection)
         self.store_mode_combo.currentIndexChanged.connect(self.clear_weapon_selection)
-        self.session_mode_combo.currentIndexChanged.connect(self.change_session_mode)
         self.import_tracker_button.clicked.connect(self.import_tracker_deathmatches)
         self.import_ranked_button.clicked.connect(self.import_tracker_rankeds)
         self.prev_month_button.clicked.connect(self.show_previous_month)
@@ -770,6 +860,14 @@ class MainWindow(QWidget):
         self.reset_settings_button.clicked.connect(self.reset_quick_settings_to_defaults)
         self.setting_show_api_key.toggled.connect(self.toggle_api_key_visibility)
         self.setting_capture_mode.currentIndexChanged.connect(self.refresh_capture_mode_warning)
+        self.setting_overlay_enabled.toggled.connect(self.apply_overlay_settings)
+        self.setting_overlay_opacity.valueChanged.connect(self.apply_overlay_settings)
+        self.setting_overlay_scale.valueChanged.connect(self.apply_overlay_settings)
+        self.setting_overlay_position.currentIndexChanged.connect(self.apply_overlay_settings)
+        self.setting_overlay_click_through.toggled.connect(self.apply_overlay_settings)
+        self.setting_overlay_always_on_top.toggled.connect(self.apply_overlay_settings)
+        self.setting_overlay_minimal.toggled.connect(self.apply_overlay_settings)
+        self.overlay_toggle_button.clicked.connect(self.toggle_overlay_preview)
 
         self.signals.toggle_session_requested.connect(self.toggle_session)
         self.signals.reset_requested.connect(self.reset_counters)
@@ -885,6 +983,13 @@ class MainWindow(QWidget):
         self.setting_max_scan.setValue(int(tracker_settings.get("max_scan_matches", 2500)))
         self.setting_request_delay.setValue(float(tracker_settings.get("request_delay_seconds", 1.5)))
         self.setting_ranked_detail_enrichment.setChecked(bool(tracker_settings.get("ranked_detail_enrichment", True)))
+        self.setting_overlay_enabled.setChecked(bool(config.overlay_enabled))
+        self.setting_overlay_opacity.setValue(float(config.overlay_opacity))
+        self.setting_overlay_scale.setValue(float(config.overlay_scale))
+        self.set_combo_data(self.setting_overlay_position, str(config.overlay_position))
+        self.setting_overlay_click_through.setChecked(bool(config.overlay_click_through))
+        self.setting_overlay_always_on_top.setChecked(bool(config.overlay_always_on_top))
+        self.setting_overlay_minimal.setChecked(bool(config.overlay_minimal_mode))
 
     def build_config_from_form(self) -> AppConfig:
         current = self.app_config
@@ -948,6 +1053,15 @@ class MainWindow(QWidget):
                 "entry_cost": self.setting_ranked_entry_cost.value(),
                 "bonus_per_clean_hit": self.setting_ranked_bonus.value(),
             },
+            "overlay_enabled": self.setting_overlay_enabled.isChecked(),
+            "overlay_opacity": self.setting_overlay_opacity.value(),
+            "overlay_position": str(
+                self.setting_overlay_position.currentData() or "top_right"
+            ),
+            "overlay_scale": self.setting_overlay_scale.value(),
+            "overlay_click_through": self.setting_overlay_click_through.isChecked(),
+            "overlay_always_on_top": self.setting_overlay_always_on_top.isChecked(),
+            "overlay_minimal_mode": self.setting_overlay_minimal.isChecked(),
             "input_timing": input_settings,
         }
         if hasattr(self, "setting_kcred_clean"):
@@ -984,8 +1098,10 @@ class MainWindow(QWidget):
         self.app_config = load_config()
         self.calendar_settings = self.app_config.training_calendar
         self.controller = AppController()
+        self.overlay_window.state_provider = self.controller.get_overlay_snapshot
         self.last_runtime_revision = -1
         self.refresh_api_key_status()
+        self.apply_overlay_settings()
         self.refresh_all()
         self.settings_status_label.setText("Settings saved and reloaded.")
         QMessageBox.information(
@@ -1000,13 +1116,44 @@ class MainWindow(QWidget):
         self.load_settings_into_form(self.app_config)
         self.last_runtime_revision = -1
         self.refresh_api_key_status()
+        self.apply_overlay_settings()
         self.refresh_training_calendar_table()
         self.settings_status_label.setText("Settings reloaded from file.")
 
     def reset_quick_settings_to_defaults(self) -> None:
         default_config = AppConfig()
         self.load_settings_into_form(default_config)
+        self.apply_overlay_settings()
         self.settings_status_label.setText("Defaults loaded on screen. Save settings to apply them.")
+
+    def overlay_settings_from_form(self) -> dict[str, object]:
+        return {
+            "overlay_enabled": self.setting_overlay_enabled.isChecked(),
+            "overlay_opacity": self.setting_overlay_opacity.value(),
+            "overlay_position": str(
+                self.setting_overlay_position.currentData() or "top_right"
+            ),
+            "overlay_scale": self.setting_overlay_scale.value(),
+            "overlay_click_through": self.setting_overlay_click_through.isChecked(),
+            "overlay_always_on_top": self.setting_overlay_always_on_top.isChecked(),
+            "overlay_minimal_mode": self.setting_overlay_minimal.isChecked(),
+        }
+
+    def apply_overlay_settings(self, *_args) -> None:
+        if not hasattr(self, "overlay_window"):
+            return
+        self.overlay_window.apply_settings(self.overlay_settings_from_form())
+
+    def toggle_overlay_preview(self) -> None:
+        if self.overlay_window.isVisible():
+            self.overlay_window.hide()
+            return
+        self.overlay_window.apply_settings(
+            {
+                **self.overlay_settings_from_form(),
+                "overlay_enabled": True,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Listener setup
@@ -1102,7 +1249,7 @@ class MainWindow(QWidget):
             getattr(self, "main_stack", None) is not None
             and getattr(self, "settings_stack", None) is not None
             and self.main_stack.currentWidget() is self.main_pages.get("settings")
-            and self.settings_stack.currentIndex() == 2
+            and self.settings_stack.currentIndex() == 3
         )
 
     def maybe_auto_start_session(self, trigger_input: str) -> bool:
@@ -1311,29 +1458,24 @@ class MainWindow(QWidget):
         return True
 
     def selected_session_mode(self) -> str:
-        return str(self.session_mode_combo.currentData() or "deathmatch")
+        return "ranked" if self.game_modes_stack.currentIndex() == 1 else "deathmatch"
 
-    def change_session_mode(self) -> None:
-        session_mode = self.selected_session_mode()
+    def select_game_mode(self, session_mode: str) -> None:
         try:
             self.controller.set_session_mode(session_mode)
         except RuntimeError as error:
             QMessageBox.warning(self, "Mode locked", self.translate_runtime_error(error))
-            self.set_session_mode_combo(self.controller.current_session_mode)
+            self.set_game_mode_page(self.controller.current_session_mode)
             return
 
         self._update_capture_listeners()
         self.refresh_live_stats()
         self.refresh_buttons()
 
-    def set_session_mode_combo(self, session_mode: str) -> None:
-        index = self.session_mode_combo.findData(session_mode)
-        if index < 0 or index == self.session_mode_combo.currentIndex():
-            return
-
-        self.session_mode_combo.blockSignals(True)
-        self.session_mode_combo.setCurrentIndex(index)
-        self.session_mode_combo.blockSignals(False)
+    def set_game_mode_page(self, session_mode: str) -> None:
+        index = 1 if session_mode == "ranked" else 0
+        if self.game_modes_stack.currentIndex() != index:
+            self._set_subpage(self.game_modes_stack, index, self.game_modes_buttons)
 
     def import_tracker_deathmatches(self) -> None:
         mode = str(self.dm_import_mode.currentData() or "update")
@@ -1580,10 +1722,12 @@ class MainWindow(QWidget):
         self.start_button.setEnabled((not is_active) and (not has_pending_purchase))
         self.finish_button.setEnabled(is_active)
         self.reset_button.setEnabled(is_active)
-        self.session_mode_combo.setEnabled((not is_active) and (not has_pending_purchase))
+        mode_enabled = (not is_active) and (not has_pending_purchase)
+        for button in self.game_modes_buttons:
+            button.setEnabled(mode_enabled)
         self.weapon_combo.setEnabled(has_pending_purchase)
         self.confirm_purchase_button.setEnabled(has_pending_purchase or bool(self.weapon_selection_counts))
-        self.set_session_mode_combo(self.controller.current_session_mode)
+        self.set_game_mode_page(self.controller.current_session_mode)
         if is_active:
             if self.controller.current_session_mode == "ranked":
                 self.purchase_status_label.setText("Ranked audit session is active. Economy settles when the session ends.")
@@ -1709,6 +1853,7 @@ class MainWindow(QWidget):
     def refresh_tracker_table(self) -> None:
         matches = load_tracker_dm_matches()[:150]
         headers = ["Date", "Map", "Agent", "K", "D", "A", "KD", "Duration", "Weapon", "Protocol"]
+        self.tracker_page.setVisible(bool(matches))
 
         self.tracker_table.setColumnCount(len(headers))
         self.tracker_table.setHorizontalHeaderLabels(headers)
@@ -2172,6 +2317,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:
+        self.overlay_window.close()
         if self.controller.is_session_active:
             self.controller.stop_without_saving()
         self._stop_mouse_listener()
