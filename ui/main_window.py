@@ -68,7 +68,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.22.4"
+    APP_VERSION = "v0.22.5"
 
     def __init__(self) -> None:
         super().__init__()
@@ -534,6 +534,8 @@ class MainWindow(QWidget):
         self.input_debug_last_fire_label = QLabel("Last fire state: -")
         self.input_debug_windows_label = QLabel("Jump: - | Brake: -")
         self.input_debug_overlay_label = QLabel("Overlay: -")
+        self.input_debug_ratios_label = QLabel("Ratios: -")
+        self.input_debug_ratios_label.setWordWrap(True)
         self.input_debug_warnings_label = QLabel("Warnings: -")
         self.input_debug_warnings_label.setWordWrap(True)
         summary_layout.addWidget(self.input_debug_body_state_label, 0, 0)
@@ -541,7 +543,8 @@ class MainWindow(QWidget):
         summary_layout.addWidget(self.input_debug_last_fire_label, 1, 0)
         summary_layout.addWidget(self.input_debug_windows_label, 1, 1)
         summary_layout.addWidget(self.input_debug_overlay_label, 2, 0, 1, 2)
-        summary_layout.addWidget(self.input_debug_warnings_label, 3, 0, 1, 2)
+        summary_layout.addWidget(self.input_debug_ratios_label, 3, 0, 1, 2)
+        summary_layout.addWidget(self.input_debug_warnings_label, 4, 0, 1, 2)
         root.addWidget(summary_group)
 
         self.input_debug_text = QPlainTextEdit()
@@ -1335,6 +1338,13 @@ class MainWindow(QWidget):
             f"pulse {snapshot.get('overlay_input_pulse_ms') or '-'} ms | "
             f"last refresh age {overlay_age_text}"
         )
+        self.input_debug_ratios_label.setText(
+            "Ratios: "
+            f"Diag {snapshot.get('diagonal_ratio_percent', 0.0)}% "
+            f"({snapshot.get('diagonal_time_ms', 0)} / {snapshot.get('movement_time_ms', 0)} ms) | "
+            f"Brake {snapshot.get('missed_brake_ratio_percent', 0.0)}% "
+            f"({snapshot.get('missed_brake_count', 0)} / {snapshot.get('brake_opportunity_count', 0)})"
+        )
         self.input_debug_warnings_label.setText(
             f"Warnings: {self.format_warning_summary(snapshot)}"
         )
@@ -1397,6 +1407,13 @@ class MainWindow(QWidget):
             f"Overlay input pulse: {snapshot.get('overlay_input_pulse_ms')} ms",
             f"Overlay scroll pulse: {snapshot.get('overlay_scroll_pulse_ms')} ms",
             f"Overlay last refresh age: {snapshot.get('overlay_last_refresh_age_ms')}",
+            f"Diagonal ratio: {snapshot.get('diagonal_ratio_percent')}% ({snapshot.get('diagonal_time_ms')} / {snapshot.get('movement_time_ms')} ms)",
+            "Missed brake ratio: "
+            f"{snapshot.get('missed_brake_ratio_percent')}% "
+            f"({snapshot.get('missed_brake_count')} / {snapshot.get('brake_opportunity_count')})",
+            f"Last expected brake key: {snapshot.get('last_expected_brake_key') or '-'}",
+            f"Last missed brake direction: {snapshot.get('last_missed_brake_direction') or '-'}",
+            f"Last release to fire: {snapshot.get('last_release_to_fire_ms')}",
             f"Current warnings: {MainWindow.format_warning_summary(snapshot)}",
             "",
             "Active keys:",

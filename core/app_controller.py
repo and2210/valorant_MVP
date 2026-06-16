@@ -132,6 +132,16 @@ class AppController:
 
     def get_overlay_snapshot(self) -> dict[str, Any]:
         input_stats = self.input_timing.snapshot()
+        diagonal_ratio_percent = (
+            round((input_stats.diagonal_seconds / input_stats.movement_seconds) * 100.0, 1)
+            if input_stats.movement_seconds > 0
+            else 0.0
+        )
+        missed_brake_ratio_percent = (
+            round((input_stats.missed_brake_count / input_stats.brake_opportunity_count) * 100.0, 1)
+            if input_stats.brake_opportunity_count > 0
+            else 0.0
+        )
         return {
             "session_active": self.is_session_active,
             "session_mode": self.current_session_mode,
@@ -140,6 +150,8 @@ class AppController:
             "event_counts_by_input": dict(input_stats.event_counts_by_input or {}),
             "current_warnings": list(input_stats.current_warnings or []),
             "warning_counts": dict(input_stats.warning_counts or {}),
+            "diagonal_ratio_percent": diagonal_ratio_percent,
+            "missed_brake_ratio_percent": missed_brake_ratio_percent,
             "scroll_events": int(input_stats.scroll_events),
             "scroll_jump_events": int(input_stats.scroll_jump_events),
         }

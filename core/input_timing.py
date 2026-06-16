@@ -95,8 +95,14 @@ class InputTimingStats:
     scoreboard_presses: int = 0
     diagonal_entries: int = 0
     diagonal_seconds: float = 0.0
+    movement_seconds: float = 0.0
     forward_seconds: float = 0.0
     lateral_seconds: float = 0.0
+    brake_opportunity_count: int = 0
+    missed_brake_count: int = 0
+    last_expected_brake_key: str = ""
+    last_missed_brake_direction: str = ""
+    last_release_to_fire_ms: int | None = None
     active_state_snapshot: dict[str, bool] = field(default_factory=dict)
     training_state_snapshot: dict[str, Any] = field(default_factory=dict)
     action_counts: dict[str, int] = field(default_factory=dict)
@@ -119,6 +125,7 @@ class InputTimingStats:
         data["total_fire_seconds"] = round(self.total_fire_seconds, 4)
         data["max_fire_seconds"] = round(self.max_fire_seconds, 4)
         data["diagonal_seconds"] = round(self.diagonal_seconds, 4)
+        data["movement_seconds"] = round(self.movement_seconds, 4)
         data["forward_seconds"] = round(self.forward_seconds, 4)
         data["lateral_seconds"] = round(self.lateral_seconds, 4)
         data["jump_window_active_seconds"] = round(self.jump_window_active_seconds, 4)
@@ -137,6 +144,7 @@ class InputTimingTracker:
     RECENT_FORWARD_RELEASE_SECONDS = 0.50
     LONG_LATERAL_HOLD_SECONDS = 0.45
     WARNING_LATCH_SECONDS = 1.20
+    BRAKE_EXPECTATION_WINDOW_SECONDS = 0.18
 
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or load_config()
@@ -159,6 +167,7 @@ class InputTimingTracker:
         self.last_jump_intent_at = 0.0
         self.jump_window_tracked_keys: set[str] = set()
         self.warning_latches: dict[str, float] = {}
+        self.pending_brake_window: dict[str, Any] | None = None
         self._reset_raw_event_buffer()
 
     def _read_capture_mode(self) -> str:
@@ -291,6 +300,7 @@ class InputTimingTracker:
         self.last_jump_intent_at = 0.0
         self.jump_window_tracked_keys = set()
         self.warning_latches = {}
+        self.pending_brake_window = None
         self.stats.current_warnings = self._current_warnings(self.last_state_update)
 
     def snapshot(self) -> InputTimingStats:
@@ -338,6 +348,18 @@ class InputTimingTracker:
         jump_window_remaining = max(jump_until - now, 0.0)
         current_warnings = self._current_warnings(now)
         self.stats.current_warnings = list(current_warnings)
+        movement_time_ms = int(round(self.stats.movement_seconds * 1000))
+        diagonal_time_ms = int(round(self.stats.diagonal_seconds * 1000))
+        diagonal_ratio_percent = (
+            round((self.stats.diagonal_seconds / self.stats.movement_seconds) * 100.0, 1)
+            if self.stats.movement_seconds > 0
+            else 0.0
+        )
+        missed_brake_ratio_percent = (
+            round((self.stats.missed_brake_count / self.stats.brake_opportunity_count) * 100.0, 1)
+            if self.stats.brake_opportunity_count > 0
+            else 0.0
+        )
         return {
             "enabled": bool(self.enabled),
             "body_state": str(training_state.get("body_state") or "idle"),
@@ -350,6 +372,15 @@ class InputTimingTracker:
             "raw_events_total": int(self.raw_events_total),
             "last_fire_state": str(training_state.get("last_fire_body_state") or "idle"),
             "last_fire_at": float(training_state.get("last_fire_at") or 0.0),
+            "diagonal_ratio_percent": diagonal_ratio_percent,
+            "diagonal_time_ms": diagonal_time_ms,
+            "movement_time_ms": movement_time_ms,
+            "missed_brake_ratio_percent": missed_brake_ratio_percent,
+            "missed_brake_count": int(self.stats.missed_brake_count),
+            "brake_opportunity_count": int(self.stats.brake_opportunity_count),
+            "last_expected_brake_key": str(self.stats.last_expected_brake_key or ""),
+            "last_missed_brake_direction": str(self.stats.last_missed_brake_direction or ""),
+            "last_release_to_fire_ms": self.stats.last_release_to_fire_ms,
             "jump_window_active": jump_window_remaining > 0,
             "jump_window_remaining_ms": int(round(jump_window_remaining * 1000)),
             "brake_window_active": brake_window_remaining > 0,
@@ -448,6 +479,7 @@ class InputTimingTracker:
         self._register_action_count(action)
         self.note_jump_window_movement(input_id, now)
         self._note_diagonal_entry(now)
+        self._note_brake_press(input_id, now)
 
     def on_key_release(self, raw_key: str) -> None:
         if not self.enabled:
@@ -473,6 +505,7 @@ class InputTimingTracker:
         self.training_state.process(action=action_definition, event_type="key_up", monotonic_timestamp=now)
         self._record_raw_event("up", input_id, action, now, now - state.started_at)
         self._complete_interval(input_id, action, state.started_at, now)
+        self._note_brake_release(input_id, now)
         if not (self.has_forward() and self.has_lateral()):
             self.diagonal_active = False
 
@@ -503,6 +536,7 @@ class InputTimingTracker:
             if action == "fire":
                 self.stats.lmb_down_count += 1
                 fire_state = str(self.training_state.snapshot(now).last_fire_body_state)
+                self._evaluate_brake_opportunity(now, fire_state)
                 if fire_state == "moving":
                     self._register_warning("fire_while_moving", now)
                 elif fire_state == "jumping":
@@ -565,6 +599,8 @@ class InputTimingTracker:
             self.stats.forward_seconds += elapsed
         if has_lateral:
             self.stats.lateral_seconds += elapsed
+        if has_forward or has_lateral:
+            self.stats.movement_seconds += elapsed
         jump_window_active = self.is_jump_related_window_active(now)
         if has_forward and has_lateral:
             if jump_window_active:
@@ -583,6 +619,7 @@ class InputTimingTracker:
                 self.stats.diagonal_entries += 1
                 self._register_warning("diagonal_movement", now)
         self.diagonal_active = currently_diagonal
+        self._expire_brake_window(now)
         self.last_state_update = now
 
     def _register_action_count(self, action: str) -> None:
@@ -716,6 +753,59 @@ class InputTimingTracker:
             if released_at > 0 and (current_time - released_at) < self.RECENT_FORWARD_RELEASE_SECONDS:
                 return True
         return False
+
+    def _note_brake_release(self, input_id: str, now: float) -> None:
+        if input_id not in LATERAL_KEYS:
+            return
+        expected_key = "d" if input_id == "a" else "a"
+        self.pending_brake_window = {
+            "released_key": input_id,
+            "expected_key": expected_key,
+            "released_at": now,
+            "opposite_pressed": False,
+            "consumed": False,
+        }
+
+    def _note_brake_press(self, input_id: str, now: float) -> None:
+        if not self.pending_brake_window:
+            return
+        self._expire_brake_window(now)
+        if not self.pending_brake_window:
+            return
+        if input_id == str(self.pending_brake_window.get("expected_key") or ""):
+            self.pending_brake_window["opposite_pressed"] = True
+
+    def _expire_brake_window(self, now: float) -> None:
+        if not self.pending_brake_window:
+            return
+        released_at = float(self.pending_brake_window.get("released_at") or 0.0)
+        if (
+            released_at > 0
+            and (now - released_at) > self.BRAKE_EXPECTATION_WINDOW_SECONDS
+        ):
+            self.pending_brake_window = None
+
+    def _evaluate_brake_opportunity(self, now: float, fire_state: str) -> None:
+        if not self.pending_brake_window:
+            return
+        self._expire_brake_window(now)
+        if not self.pending_brake_window:
+            return
+        if bool(self.pending_brake_window.get("consumed", False)):
+            return
+
+        released_at = float(self.pending_brake_window.get("released_at") or 0.0)
+        released_key = str(self.pending_brake_window.get("released_key") or "")
+        expected_key = str(self.pending_brake_window.get("expected_key") or "")
+        opposite_pressed = bool(self.pending_brake_window.get("opposite_pressed", False))
+
+        self.stats.brake_opportunity_count += 1
+        self.stats.last_expected_brake_key = expected_key
+        self.stats.last_release_to_fire_ms = int(round(max(now - released_at, 0.0) * 1000))
+        if (not opposite_pressed) and fire_state != "braking":
+            self.stats.missed_brake_count += 1
+            self.stats.last_missed_brake_direction = "left" if released_key == "a" else "right"
+        self.pending_brake_window["consumed"] = True
 
     def _active_state_snapshot(self) -> dict[str, bool]:
         active_ids = set(self.active_state)

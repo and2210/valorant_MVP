@@ -65,6 +65,20 @@ class OverlayWindow(QWidget):
         status_row.addWidget(self.compact_status_label, stretch=1)
         panel_layout.addLayout(status_row)
 
+        ratio_row = QHBoxLayout()
+        ratio_row.setContentsMargins(0, 0, 0, 0)
+        ratio_row.setSpacing(8)
+        ratio_row.addWidget(QLabel("Diag"))
+        self.diag_ratio_dot = QLabel()
+        self.diag_ratio_dot.setFixedSize(10, 10)
+        ratio_row.addWidget(self.diag_ratio_dot)
+        ratio_row.addWidget(QLabel("Brake"))
+        self.brake_ratio_dot = QLabel()
+        self.brake_ratio_dot.setFixedSize(10, 10)
+        ratio_row.addWidget(self.brake_ratio_dot)
+        ratio_row.addStretch(1)
+        panel_layout.addLayout(ratio_row)
+
         keys = QGridLayout()
         keys.setContentsMargins(0, 0, 0, 0)
         keys.setHorizontalSpacing(4)
@@ -234,6 +248,8 @@ class OverlayWindow(QWidget):
             "session_mode": str(snapshot.get("session_mode") or "deathmatch"),
             "input_state": dict(snapshot.get("input_state") or {}),
             "current_warnings": list(snapshot.get("current_warnings") or []),
+            "diagonal_ratio_percent": float(snapshot.get("diagonal_ratio_percent") or 0.0),
+            "missed_brake_ratio_percent": float(snapshot.get("missed_brake_ratio_percent") or 0.0),
             "pulse_active": {
                 key: bool(expires_at > now)
                 for key, expires_at in self._pulse_until.items()
@@ -262,6 +278,8 @@ class OverlayWindow(QWidget):
             f"background-color: {'#22C55E' if active else '#EF4444'};"
         )
         self.compact_status_label.setText(f"{status} . {mode_label}")
+        self._set_ratio_dot(self.diag_ratio_dot, float(state.get("diagonal_ratio_percent") or 0.0))
+        self._set_ratio_dot(self.brake_ratio_dot, float(state.get("missed_brake_ratio_percent") or 0.0))
 
         warnings = [self._warning_label(name) for name in state.get("current_warnings", [])]
         self.warning_label.setText(self._fit_warning_text(" | ".join(warnings[:3])))
@@ -290,6 +308,19 @@ class OverlayWindow(QWidget):
             text,
             Qt.TextElideMode.ElideRight,
             max(self.warning_label.width(), 1),
+        )
+
+    @staticmethod
+    def _set_ratio_dot(label: QLabel, ratio_percent: float) -> None:
+        if ratio_percent < 33.0:
+            color = "#22C55E"
+        elif ratio_percent <= 66.0:
+            color = "#FACC15"
+        else:
+            color = "#EF4444"
+        label.setStyleSheet(
+            "border-radius: 5px;"
+            f"background-color: {color};"
         )
 
     @staticmethod
