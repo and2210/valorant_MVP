@@ -43,6 +43,7 @@ from core.config import CONFIG_FILE, DATA_DIR, PROJECT_ROOT, AppConfig, load_con
 from core.dashboard import DashboardStats
 from core.persistence import load_all_sessions
 from core.protocol_tracker import DIAGONAL_RULE_LABELS
+from core.runtime_identity import collect_runtime_identity
 from core.tracker_importer import (
     build_ranked_radiante_stats,
     build_training_calendar,
@@ -65,7 +66,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.21.14"
+    APP_VERSION = "v0.21.15"
 
     def __init__(self) -> None:
         super().__init__()
@@ -87,6 +88,7 @@ class MainWindow(QWidget):
         self.overlay_window = OverlayWindow(self.controller.get_overlay_snapshot)
         self._connect_signals()
         self.load_settings_into_form(self.app_config)
+        self.refresh_runtime_identity()
         self.apply_overlay_settings()
         self._start_input_listeners()
 
@@ -309,6 +311,7 @@ class MainWindow(QWidget):
             ("Import", self._make_scroll_page(self._build_import_settings_page())),
             ("Overlay", self._make_scroll_page(self._build_overlay_settings_page())),
             ("Debug / Errors", self._make_scroll_page(self._build_debug_settings_page())),
+            ("Runtime / About", self._make_scroll_page(self._build_runtime_identity_page())),
         ]
 
         buttons_layout = QHBoxLayout()
@@ -504,6 +507,38 @@ class MainWindow(QWidget):
         root.addStretch(1)
         return page
 
+    def _build_runtime_identity_page(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        root.addWidget(QLabel("Runtime / Diagnostics / About"))
+
+        warning_group = QGroupBox("Runtime Status")
+        warning_layout = QVBoxLayout(warning_group)
+        self.runtime_warning_label = QLabel("Checking runtime identity...")
+        self.runtime_warning_label.setWordWrap(True)
+        self.runtime_warning_label.setObjectName("RuntimeWarningLabel")
+        warning_layout.addWidget(self.runtime_warning_label)
+        root.addWidget(warning_group)
+
+        details_group = QGroupBox("Runtime Diagnostics")
+        details_layout = QVBoxLayout(details_group)
+        self.runtime_identity_text = QPlainTextEdit()
+        self.runtime_identity_text.setReadOnly(True)
+        self.runtime_identity_text.setMinimumHeight(260)
+        details_layout.addWidget(self.runtime_identity_text)
+        root.addWidget(details_group)
+
+        actions = QHBoxLayout()
+        self.refresh_runtime_identity_button = QPushButton("Refresh Diagnostics")
+        self.copy_runtime_identity_button = QPushButton("Copy Diagnostics")
+        self.runtime_copy_status_label = QLabel("Ready.")
+        actions.addWidget(self.refresh_runtime_identity_button)
+        actions.addWidget(self.copy_runtime_identity_button)
+        actions.addWidget(self.runtime_copy_status_label, stretch=1)
+        root.addLayout(actions)
+        root.addStretch(1)
+        return page
+
     def _build_overlay_settings_page(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
@@ -692,6 +727,10 @@ class MainWindow(QWidget):
                 color: #94A3B8;
                 font-weight: bold;
             }
+            QLabel#RuntimeWarningLabel {
+                color: #F59E0B;
+                font-weight: bold;
+            }
             QFrame#ImportStatusBar {
                 border-top: 1px solid rgba(148, 163, 184, 90);
             }
@@ -868,6 +907,8 @@ class MainWindow(QWidget):
         self.setting_overlay_always_on_top.toggled.connect(self.apply_overlay_settings)
         self.setting_overlay_minimal.toggled.connect(self.apply_overlay_settings)
         self.overlay_toggle_button.clicked.connect(self.toggle_overlay_preview)
+        self.refresh_runtime_identity_button.clicked.connect(self.refresh_runtime_identity)
+        self.copy_runtime_identity_button.clicked.connect(self.copy_runtime_identity)
 
         self.signals.toggle_session_requested.connect(self.toggle_session)
         self.signals.reset_requested.connect(self.reset_counters)
@@ -1099,6 +1140,7 @@ class MainWindow(QWidget):
         self.calendar_settings = self.app_config.training_calendar
         self.controller = AppController()
         self.overlay_window.state_provider = self.controller.get_overlay_snapshot
+        self.refresh_runtime_identity()
         self.last_runtime_revision = -1
         self.refresh_api_key_status()
         self.apply_overlay_settings()
@@ -1114,6 +1156,7 @@ class MainWindow(QWidget):
         self.app_config = load_config()
         self.calendar_settings = self.app_config.training_calendar
         self.load_settings_into_form(self.app_config)
+        self.refresh_runtime_identity()
         self.last_runtime_revision = -1
         self.refresh_api_key_status()
         self.apply_overlay_settings()
@@ -1125,6 +1168,27 @@ class MainWindow(QWidget):
         self.load_settings_into_form(default_config)
         self.apply_overlay_settings()
         self.settings_status_label.setText("Defaults loaded on screen. Save settings to apply them.")
+
+    def refresh_runtime_identity(self) -> None:
+        identity = collect_runtime_identity(
+            app_version=self.APP_VERSION,
+            project_root=PROJECT_ROOT,
+            launch_entry_file=PROJECT_ROOT / "launch.pyw",
+        )
+        self.runtime_identity_warnings = list(identity.warnings)
+        self.runtime_identity_text.setPlainText(identity.as_text())
+        if identity.warnings:
+            self.runtime_warning_label.setText("\n".join(f"Warning: {item}" for item in identity.warnings))
+        else:
+            self.runtime_warning_label.setText("Runtime identity looks consistent.")
+        self.runtime_copy_status_label.setText("Diagnostics refreshed.")
+
+    def copy_runtime_identity(self) -> None:
+        diagnostics = self.runtime_identity_text.toPlainText().strip()
+        warnings = "\n".join(f"Warning: {item}" for item in getattr(self, "runtime_identity_warnings", []))
+        text = diagnostics if not warnings else f"{diagnostics}\n\n{warnings}"
+        QApplication.clipboard().setText(text)
+        self.runtime_copy_status_label.setText("Diagnostics copied to clipboard.")
 
     def overlay_settings_from_form(self) -> dict[str, object]:
         return {
