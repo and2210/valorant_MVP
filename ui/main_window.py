@@ -68,7 +68,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.22.3"
+    APP_VERSION = "v0.22.4"
 
     def __init__(self) -> None:
         super().__init__()
@@ -1297,10 +1297,17 @@ class MainWindow(QWidget):
 
     def get_input_debug_snapshot(self) -> dict[str, object]:
         overlay_interval_ms, overlay_age_ms = self.get_overlay_debug_timing()
-        return self.controller.get_input_debug_snapshot(
+        snapshot = self.controller.get_input_debug_snapshot(
             overlay_update_interval_ms=overlay_interval_ms,
             overlay_last_refresh_age_ms=overlay_age_ms,
         )
+        snapshot["overlay_input_pulse_ms"] = int(
+            getattr(self.overlay_window, "INPUT_PULSE_MS", 0) or 0
+        )
+        snapshot["overlay_scroll_pulse_ms"] = int(
+            getattr(self.overlay_window, "SCROLL_PULSE_MS", 0) or 0
+        )
+        return snapshot
 
     def refresh_input_debug_view(self) -> None:
         snapshot = self.get_input_debug_snapshot()
@@ -1325,6 +1332,7 @@ class MainWindow(QWidget):
         )
         self.input_debug_overlay_label.setText(
             f"Overlay: interval {snapshot.get('overlay_update_interval_ms') or '-'} ms | "
+            f"pulse {snapshot.get('overlay_input_pulse_ms') or '-'} ms | "
             f"last refresh age {overlay_age_text}"
         )
         self.input_debug_warnings_label.setText(
@@ -1386,6 +1394,8 @@ class MainWindow(QWidget):
             f"Jump window active: {snapshot.get('jump_window_active')} ({snapshot.get('jump_window_remaining_ms')} ms)",
             f"Brake window active: {snapshot.get('brake_window_active')} ({snapshot.get('brake_window_remaining_ms')} ms)",
             f"Overlay interval: {snapshot.get('overlay_update_interval_ms')} ms",
+            f"Overlay input pulse: {snapshot.get('overlay_input_pulse_ms')} ms",
+            f"Overlay scroll pulse: {snapshot.get('overlay_scroll_pulse_ms')} ms",
             f"Overlay last refresh age: {snapshot.get('overlay_last_refresh_age_ms')}",
             f"Current warnings: {MainWindow.format_warning_summary(snapshot)}",
             "",

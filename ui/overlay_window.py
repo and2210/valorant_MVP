@@ -5,14 +5,14 @@ from collections.abc import Callable
 from typing import Any
 
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QGuiApplication, QMouseEvent
+from PySide6.QtGui import QFontMetrics, QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 
 class OverlayWindow(QWidget):
-    UPDATE_INTERVAL_MS = 80
-    SCROLL_HIGHLIGHT_TICKS = 2
-    INPUT_PULSE_TICKS = 2
+    UPDATE_INTERVAL_MS = 60
+    INPUT_PULSE_MS = 60
+    SCROLL_PULSE_MS = 60
 
     def __init__(
         self,
@@ -28,9 +28,9 @@ class OverlayWindow(QWidget):
         self._last_scroll_events = 0
         self._last_scroll_jump_events = 0
         self._last_event_counts_by_input: dict[str, int] = {}
-        self._input_pulse_ticks: dict[str, int] = {}
-        self._scroll_ticks = 0
-        self._scroll_jump_ticks = 0
+        self._pulse_until: dict[str, float] = {}
+        self._scroll_until = 0.0
+        self._scroll_jump_until = 0.0
         self._last_refresh_monotonic = 0.0
         self._drag_offset: QPoint | None = None
         self._drag_started = False
@@ -56,26 +56,17 @@ class OverlayWindow(QWidget):
         panel_layout.setSpacing(6)
 
         status_row = QHBoxLayout()
-        self.session_dot = QLabel("●")
-        self.session_label = QLabel("Session: OFF")
-        self.mode_label = QLabel("Mode: Deathmatch")
-        self.body_state_label = QLabel("State: idle")
-        self.session_dot.setText("")
+        status_row.setContentsMargins(0, 0, 0, 0)
+        self.session_dot = QLabel()
         self.session_dot.setFixedSize(10, 10)
-        self.session_label.hide()
-        self.mode_label.hide()
-        self.body_state_label.setText("No warnings")
-        self.body_state_label.setWordWrap(True)
-        self.body_state_label.setObjectName("OverlayWarningLabel")
-        self.warning_label = self.body_state_label
+        self.compact_status_label = QLabel("Ready . Deathmatch")
+        self.compact_status_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         status_row.addWidget(self.session_dot)
-        status_row.addWidget(self.session_label)
-        status_row.addStretch(1)
+        status_row.addWidget(self.compact_status_label, stretch=1)
         panel_layout.addLayout(status_row)
-        panel_layout.addWidget(self.mode_label)
-        panel_layout.addWidget(self.body_state_label)
 
         keys = QGridLayout()
+        keys.setContentsMargins(0, 0, 0, 0)
         keys.setHorizontalSpacing(4)
         keys.setVerticalSpacing(4)
         self._add_key(keys, "w", "W", 0, 1)
@@ -85,6 +76,8 @@ class OverlayWindow(QWidget):
         panel_layout.addLayout(keys)
 
         modifiers = QHBoxLayout()
+        modifiers.setContentsMargins(0, 0, 0, 0)
+        modifiers.setSpacing(4)
         for key, text in (("shift", "Shift"), ("ctrl", "Ctrl")):
             label = self._make_key_label(text)
             self.key_labels[key] = label
@@ -92,17 +85,18 @@ class OverlayWindow(QWidget):
         panel_layout.addLayout(modifiers)
 
         mouse_row = QHBoxLayout()
-        for key, text in (
-            ("mouse_left", "LMB"),
-            ("jump", "Jump"),
-        ):
+        mouse_row.setContentsMargins(0, 0, 0, 0)
+        mouse_row.setSpacing(4)
+        for key, text in (("mouse_left", "LMB"), ("jump", "Jump")):
             label = self._make_key_label(text)
             self.key_labels[key] = label
             mouse_row.addWidget(label)
         panel_layout.addLayout(mouse_row)
 
-        self.compact_status_label = QLabel("Ready · Deathmatch")
-        panel_layout.addWidget(self.compact_status_label)
+        self.warning_label = QLabel("")
+        self.warning_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.warning_label.setObjectName("OverlayWarningLabel")
+        panel_layout.addWidget(self.warning_label)
         root.addWidget(self.panel)
 
     def _add_key(
@@ -154,6 +148,19 @@ class OverlayWindow(QWidget):
         font_size = max(int(round(12 * scale)), 9)
         key_height = max(int(round(28 * scale)), 22)
         key_width = max(int(round(42 * scale)), 32)
+        panel_width = max(int(round(210 * scale)), 190)
+        warning_height = max(int(round(18 * scale)), 16)
+        text_width = panel_width - 24
+
+        self.panel.setMinimumWidth(panel_width)
+        self.panel.setMaximumWidth(panel_width)
+        self.compact_status_label.setMinimumWidth(text_width)
+        self.compact_status_label.setMaximumWidth(text_width)
+        self.warning_label.setMinimumWidth(text_width)
+        self.warning_label.setMaximumWidth(text_width)
+        self.warning_label.setMinimumHeight(warning_height)
+        self.warning_label.setMaximumHeight(warning_height)
+
         self.setStyleSheet(
             f"""
             QFrame#OverlayPanel {{
@@ -192,53 +199,57 @@ class OverlayWindow(QWidget):
     def refresh_state(self) -> None:
         if not self.isVisible():
             return
-        self._last_refresh_monotonic = time.monotonic()
+
+        now = time.monotonic()
+        self._last_refresh_monotonic = now
         snapshot = self.state_provider()
+
         scroll_events = int(snapshot.get("scroll_events", 0))
         scroll_jump_events = int(snapshot.get("scroll_jump_events", 0))
         if scroll_events > self._last_scroll_events:
-            self._scroll_ticks = self.SCROLL_HIGHLIGHT_TICKS
+            self._scroll_until = now + (self.SCROLL_PULSE_MS / 1000.0)
         if scroll_jump_events > self._last_scroll_jump_events:
-            self._scroll_jump_ticks = self.SCROLL_HIGHLIGHT_TICKS
+            self._scroll_jump_until = now + (self.SCROLL_PULSE_MS / 1000.0)
         self._last_scroll_events = scroll_events
         self._last_scroll_jump_events = scroll_jump_events
+
         event_counts = dict(snapshot.get("event_counts_by_input") or {})
         for key in ("w", "a", "s", "d", "shift", "ctrl", "mouse_left"):
             current_count = int(event_counts.get(key, 0))
             if current_count > int(self._last_event_counts_by_input.get(key, 0)):
-                self._input_pulse_ticks[key] = self.INPUT_PULSE_TICKS
+                self._pulse_until[key] = now + (self.INPUT_PULSE_MS / 1000.0)
             self._last_event_counts_by_input[key] = current_count
+
         jump_count = (
             int(event_counts.get("space", 0))
             + int(event_counts.get("scroll_up", 0))
             + int(event_counts.get("scroll_down", 0))
         )
         if jump_count > int(self._last_event_counts_by_input.get("jump", 0)):
-            self._input_pulse_ticks["jump"] = self.INPUT_PULSE_TICKS
+            self._pulse_until["jump"] = now + (self.INPUT_PULSE_MS / 1000.0)
         self._last_event_counts_by_input["jump"] = jump_count
 
         render_state = {
             "session_active": bool(snapshot.get("session_active", False)),
             "session_mode": str(snapshot.get("session_mode") or "deathmatch"),
             "input_state": dict(snapshot.get("input_state") or {}),
-            "training_state": dict(snapshot.get("training_state") or {}),
             "current_warnings": list(snapshot.get("current_warnings") or []),
-            "input_pulses": dict(self._input_pulse_ticks),
-            "scroll_active": self._scroll_ticks > 0,
-            "scroll_jump_active": self._scroll_jump_ticks > 0,
+            "pulse_active": {
+                key: bool(expires_at > now)
+                for key, expires_at in self._pulse_until.items()
+            },
+            "scroll_active": bool(self._scroll_until > now),
+            "scroll_jump_active": bool(self._scroll_jump_until > now),
         }
         if render_state != self._last_rendered:
             self._render(render_state)
             self._last_rendered = render_state
 
-        self._scroll_ticks = max(self._scroll_ticks - 1, 0)
-        self._scroll_jump_ticks = max(self._scroll_jump_ticks - 1, 0)
-        for key, ticks in list(self._input_pulse_ticks.items()):
-            next_ticks = max(int(ticks) - 1, 0)
-            if next_ticks:
-                self._input_pulse_ticks[key] = next_ticks
-            else:
-                self._input_pulse_ticks.pop(key, None)
+        self._pulse_until = {
+            key: expires_at
+            for key, expires_at in self._pulse_until.items()
+            if expires_at > now
+        }
 
     def _render(self, state: dict[str, Any]) -> None:
         active = bool(state["session_active"])
@@ -250,35 +261,45 @@ class OverlayWindow(QWidget):
             "border-radius: 5px;"
             f"background-color: {'#22C55E' if active else '#EF4444'};"
         )
-        self.session_label.setText("")
-        self.mode_label.setText("")
+        self.compact_status_label.setText(f"{status} . {mode_label}")
+
         warnings = [self._warning_label(name) for name in state.get("current_warnings", [])]
-        self.warning_label.setText(" | ".join(warnings[:3]) if warnings else "No warnings")
-        self.compact_status_label.setText(f"{status} · {mode_label}")
+        self.warning_label.setText(self._fit_warning_text(" | ".join(warnings[:3])))
 
         input_state = dict(state["input_state"])
-        input_pulses = dict(state["input_pulses"])
+        pulse_active = dict(state["pulse_active"])
         for key in ("w", "a", "s", "d", "shift", "ctrl", "mouse_left"):
             self._set_pressed(
                 self.key_labels[key],
-                bool(input_state.get(key, False)) or int(input_pulses.get(key, 0)) > 0,
+                bool(input_state.get(key, False)) or bool(pulse_active.get(key, False)),
             )
+
         jump_pressed = (
             bool(input_state.get("space", False))
             or bool(state["scroll_active"])
             or bool(state["scroll_jump_active"])
-            or int(input_pulses.get("jump", 0)) > 0
+            or bool(pulse_active.get("jump", False))
         )
         self._set_pressed(self.key_labels["jump"], jump_pressed)
+
+    def _fit_warning_text(self, text: str) -> str:
+        if not text:
+            return ""
+        metrics = QFontMetrics(self.warning_label.font())
+        return metrics.elidedText(
+            text,
+            Qt.TextElideMode.ElideRight,
+            max(self.warning_label.width(), 1),
+        )
 
     @staticmethod
     def _warning_label(name: object) -> str:
         labels = {
-            "diagonal_movement": "Diagonal movement",
-            "fire_while_moving": "Firing while moving",
-            "fire_while_jumping": "Firing while jumping",
-            "fire_during_unstable_brake": "Firing during unstable brake",
-            "long_strafe_hold": "Long strafe hold / slow release",
+            "diagonal_movement": "Diagonal",
+            "fire_while_moving": "Moving shot",
+            "fire_while_jumping": "Jump shot",
+            "fire_during_unstable_brake": "Unstable brake",
+            "long_strafe_hold": "Long strafe",
         }
         return labels.get(str(name), str(name).replace("_", " ").title())
 
