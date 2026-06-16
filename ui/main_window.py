@@ -6,7 +6,7 @@ import json
 import os
 import sys
 from collections import Counter
-from datetime import date
+from datetime import date, datetime
 
 from pynput import keyboard, mouse
 from PySide6.QtCore import QDate, QObject, Qt, QTimer, Signal
@@ -549,9 +549,11 @@ class MainWindow(QWidget):
         actions = QHBoxLayout()
         self.refresh_input_debug_button = QPushButton("Refresh Input Debug")
         self.copy_input_debug_button = QPushButton("Copy Input Debug")
+        self.save_input_debug_button = QPushButton("Save Input Debug Log")
         self.input_debug_copy_status_label = QLabel("Ready.")
         actions.addWidget(self.refresh_input_debug_button)
         actions.addWidget(self.copy_input_debug_button)
+        actions.addWidget(self.save_input_debug_button)
         actions.addWidget(self.input_debug_copy_status_label, stretch=1)
         root.addLayout(actions)
         return page
@@ -985,6 +987,7 @@ class MainWindow(QWidget):
         self.overlay_toggle_button.clicked.connect(self.toggle_overlay_preview)
         self.refresh_input_debug_button.clicked.connect(self.refresh_input_debug_view)
         self.copy_input_debug_button.clicked.connect(self.copy_input_debug)
+        self.save_input_debug_button.clicked.connect(self.save_input_debug_log)
         self.refresh_runtime_identity_button.clicked.connect(self.refresh_runtime_identity)
         self.copy_runtime_identity_button.clicked.connect(self.copy_runtime_identity)
 
@@ -1328,6 +1331,45 @@ class MainWindow(QWidget):
         snapshot = self.get_input_debug_snapshot()
         QApplication.clipboard().setText(json.dumps(snapshot, indent=2, sort_keys=True))
         self.input_debug_copy_status_label.setText("Input debug copied to clipboard.")
+
+    def save_input_debug_log(self) -> None:
+        export_dir = DATA_DIR / "debug_exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("input_debug_%Y%m%d_%H%M%S")
+        path = export_dir / f"{stamp}.txt"
+        suffix = 1
+        while path.exists():
+            path = export_dir / f"{stamp}_{suffix}.txt"
+            suffix += 1
+        text = self.build_input_debug_log_text()
+        path.write_text(text, encoding="utf-8")
+        QApplication.clipboard().setText(str(path))
+        self.input_debug_copy_status_label.setText(f"Saved: {path}")
+
+    def build_input_debug_log_text(self) -> str:
+        identity = collect_runtime_identity(
+            app_version=self.APP_VERSION,
+            project_root=PROJECT_ROOT,
+            launch_entry_file=PROJECT_ROOT / "launch.pyw",
+        )
+        snapshot = self.get_input_debug_snapshot()
+        warnings = snapshot.get("current_warnings") or snapshot.get("warning_counts") or {}
+        lines = [
+            "Radiante Daily Input Debug Log",
+            "",
+            "Runtime",
+            identity.as_text(),
+            "",
+            "Input Debug",
+            self.format_input_debug_snapshot(snapshot),
+            "",
+            "Warnings / Infractions",
+            json.dumps(warnings, indent=2, sort_keys=True),
+            "",
+            "Raw Snapshot",
+            json.dumps(snapshot, indent=2, sort_keys=True),
+        ]
+        return "\n".join(lines)
 
     @staticmethod
     def format_input_debug_snapshot(snapshot: dict[str, object]) -> str:
