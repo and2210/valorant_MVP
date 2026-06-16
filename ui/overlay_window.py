@@ -111,6 +111,17 @@ class OverlayWindow(QWidget):
         self.warning_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.warning_label.setObjectName("OverlayWarningLabel")
         panel_layout.addWidget(self.warning_label)
+
+        pressure_row = QHBoxLayout()
+        pressure_row.setContentsMargins(0, 0, 0, 0)
+        pressure_row.setSpacing(8)
+        self.diag_pressure_bar = self._make_pressure_bar()
+        self.brake_pressure_bar = self._make_pressure_bar()
+        pressure_row.addWidget(QLabel("Diag"))
+        pressure_row.addWidget(self.diag_pressure_bar, stretch=1)
+        pressure_row.addWidget(QLabel("Brake"))
+        pressure_row.addWidget(self.brake_pressure_bar, stretch=1)
+        panel_layout.addLayout(pressure_row)
         root.addWidget(self.panel)
 
     def _add_key(
@@ -131,6 +142,14 @@ class OverlayWindow(QWidget):
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setProperty("pressed", False)
         return label
+
+    @staticmethod
+    def _make_pressure_bar() -> QLabel:
+        bar = QLabel()
+        bar.setFixedHeight(6)
+        bar.setMinimumWidth(44)
+        bar.setObjectName("PressureBar")
+        return bar
 
     def apply_settings(self, settings: dict[str, Any]) -> None:
         self.settings = dict(settings)
@@ -174,6 +193,8 @@ class OverlayWindow(QWidget):
         self.warning_label.setMaximumWidth(text_width)
         self.warning_label.setMinimumHeight(warning_height)
         self.warning_label.setMaximumHeight(warning_height)
+        self.diag_pressure_bar.setMinimumWidth(max(panel_width // 3, 44))
+        self.brake_pressure_bar.setMinimumWidth(max(panel_width // 3, 44))
 
         self.setStyleSheet(
             f"""
@@ -190,6 +211,11 @@ class OverlayWindow(QWidget):
                 color: #FACC15;
                 background: transparent;
                 font-weight: bold;
+            }}
+            QLabel#PressureBar {{
+                background-color: rgba(30, 41, 59, 220);
+                border: 1px solid rgba(148, 163, 184, 100);
+                border-radius: 3px;
             }}
             QLabel[pressed="false"] {{
                 background-color: rgba(51, 65, 85, 210);
@@ -250,6 +276,8 @@ class OverlayWindow(QWidget):
             "current_warnings": list(snapshot.get("current_warnings") or []),
             "diagonal_ratio_percent": float(snapshot.get("diagonal_ratio_percent") or 0.0),
             "missed_brake_ratio_percent": float(snapshot.get("missed_brake_ratio_percent") or 0.0),
+            "diagonal_pressure_percent": float(snapshot.get("diagonal_pressure_percent") or 0.0),
+            "brake_pressure_percent": float(snapshot.get("brake_pressure_percent") or 0.0),
             "pulse_active": {
                 key: bool(expires_at > now)
                 for key, expires_at in self._pulse_until.items()
@@ -280,6 +308,8 @@ class OverlayWindow(QWidget):
         self.compact_status_label.setText(f"{status} . {mode_label}")
         self._set_ratio_dot(self.diag_ratio_dot, float(state.get("diagonal_ratio_percent") or 0.0))
         self._set_ratio_dot(self.brake_ratio_dot, float(state.get("missed_brake_ratio_percent") or 0.0))
+        self._set_pressure_bar(self.diag_pressure_bar, float(state.get("diagonal_pressure_percent") or 0.0))
+        self._set_pressure_bar(self.brake_pressure_bar, float(state.get("brake_pressure_percent") or 0.0))
 
         warnings = [self._warning_label(name) for name in state.get("current_warnings", [])]
         self.warning_label.setText(self._fit_warning_text(" | ".join(warnings[:3])))
@@ -321,6 +351,16 @@ class OverlayWindow(QWidget):
         label.setStyleSheet(
             "border-radius: 5px;"
             f"background-color: {color};"
+        )
+
+    @staticmethod
+    def _set_pressure_bar(label: QLabel, pressure_percent: float) -> None:
+        percent = max(min(pressure_percent, 100.0), 0.0)
+        label.setStyleSheet(
+            "border-radius: 3px;"
+            "background-image: none;"
+            f"background-color: rgba(59, 130, 246, {60 + int(percent * 1.5)});"
+            f"min-width: 44px;"
         )
 
     @staticmethod

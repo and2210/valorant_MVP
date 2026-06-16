@@ -68,7 +68,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.22.5"
+    APP_VERSION = "v0.22.6"
 
     def __init__(self) -> None:
         super().__init__()
@@ -1343,7 +1343,9 @@ class MainWindow(QWidget):
             f"Diag {snapshot.get('diagonal_ratio_percent', 0.0)}% "
             f"({snapshot.get('diagonal_time_ms', 0)} / {snapshot.get('movement_time_ms', 0)} ms) | "
             f"Brake {snapshot.get('missed_brake_ratio_percent', 0.0)}% "
-            f"({snapshot.get('missed_brake_count', 0)} / {snapshot.get('brake_opportunity_count', 0)})"
+            f"({snapshot.get('missed_brake_count', 0)} / {snapshot.get('brake_opportunity_count', 0)}) | "
+            f"Pressure Diag {snapshot.get('diagonal_pressure_percent', 0.0)}% | "
+            f"Brake {snapshot.get('brake_pressure_percent', 0.0)}%"
         )
         self.input_debug_warnings_label.setText(
             f"Warnings: {self.format_warning_summary(snapshot)}"
@@ -1411,6 +1413,8 @@ class MainWindow(QWidget):
             "Missed brake ratio: "
             f"{snapshot.get('missed_brake_ratio_percent')}% "
             f"({snapshot.get('missed_brake_count')} / {snapshot.get('brake_opportunity_count')})",
+            f"Diagonal pressure: {snapshot.get('diagonal_pressure_percent')}%",
+            f"Brake pressure: {snapshot.get('brake_pressure_percent')}%",
             f"Last expected brake key: {snapshot.get('last_expected_brake_key') or '-'}",
             f"Last missed brake direction: {snapshot.get('last_missed_brake_direction') or '-'}",
             f"Last release to fire: {snapshot.get('last_release_to_fire_ms')}",

@@ -100,9 +100,12 @@ class InputTimingStats:
     lateral_seconds: float = 0.0
     brake_opportunity_count: int = 0
     missed_brake_count: int = 0
+    unstable_brake_count: int = 0
     last_expected_brake_key: str = ""
     last_missed_brake_direction: str = ""
     last_release_to_fire_ms: int | None = None
+    diagonal_pressure_percent: float = 0.0
+    brake_pressure_percent: float = 0.0
     active_state_snapshot: dict[str, bool] = field(default_factory=dict)
     training_state_snapshot: dict[str, Any] = field(default_factory=dict)
     action_counts: dict[str, int] = field(default_factory=dict)
@@ -168,6 +171,7 @@ class InputTimingTracker:
         self.jump_window_tracked_keys: set[str] = set()
         self.warning_latches: dict[str, float] = {}
         self.pending_brake_window: dict[str, Any] | None = None
+        self.last_brake_release_at = 0.0
         self._reset_raw_event_buffer()
 
     def _read_capture_mode(self) -> str:
@@ -301,6 +305,7 @@ class InputTimingTracker:
         self.jump_window_tracked_keys = set()
         self.warning_latches = {}
         self.pending_brake_window = None
+        self.last_brake_release_at = 0.0
         self.stats.current_warnings = self._current_warnings(self.last_state_update)
 
     def snapshot(self) -> InputTimingStats:
@@ -360,6 +365,8 @@ class InputTimingTracker:
             if self.stats.brake_opportunity_count > 0
             else 0.0
         )
+        self.stats.diagonal_pressure_percent = self._calculate_diagonal_pressure(now)
+        self.stats.brake_pressure_percent = self._calculate_brake_pressure(now)
         return {
             "enabled": bool(self.enabled),
             "body_state": str(training_state.get("body_state") or "idle"),
@@ -381,6 +388,8 @@ class InputTimingTracker:
             "last_expected_brake_key": str(self.stats.last_expected_brake_key or ""),
             "last_missed_brake_direction": str(self.stats.last_missed_brake_direction or ""),
             "last_release_to_fire_ms": self.stats.last_release_to_fire_ms,
+            "diagonal_pressure_percent": float(self.stats.diagonal_pressure_percent),
+            "brake_pressure_percent": float(self.stats.brake_pressure_percent),
             "jump_window_active": jump_window_remaining > 0,
             "jump_window_remaining_ms": int(round(jump_window_remaining * 1000)),
             "brake_window_active": brake_window_remaining > 0,
@@ -502,6 +511,8 @@ class InputTimingTracker:
 
         self.jump_window_tracked_keys.discard(input_id)
         self.last_release_times[input_id] = now
+        if input_id in LATERAL_KEYS:
+            self.last_brake_release_at = now
         self.training_state.process(action=action_definition, event_type="key_up", monotonic_timestamp=now)
         self._record_raw_event("up", input_id, action, now, now - state.started_at)
         self._complete_interval(input_id, action, state.started_at, now)
@@ -802,10 +813,33 @@ class InputTimingTracker:
         self.stats.brake_opportunity_count += 1
         self.stats.last_expected_brake_key = expected_key
         self.stats.last_release_to_fire_ms = int(round(max(now - released_at, 0.0) * 1000))
-        if (not opposite_pressed) and fire_state != "braking":
+        if opposite_pressed:
+            if fire_state != "braking":
+                self.stats.unstable_brake_count += 1
+        elif fire_state != "braking":
             self.stats.missed_brake_count += 1
             self.stats.last_missed_brake_direction = "left" if released_key == "a" else "right"
         self.pending_brake_window["consumed"] = True
+
+    def _calculate_diagonal_pressure(self, now: float) -> float:
+        base = 0.0
+        if self.diagonal_active or (self.has_forward() and self.has_lateral()):
+            base = 55.0
+        base += min(self.stats.diagonal_entries * 4.0, 25.0)
+        if self.last_diagonal_entry_at > 0 and (now - self.last_diagonal_entry_at) <= self.PRE_JUMP_GRACE_SECONDS:
+            base += 10.0
+        return round(max(min(base, 100.0), 0.0), 1)
+
+    def _calculate_brake_pressure(self, now: float) -> float:
+        base = 0.0
+        if self.pending_brake_window and not bool(self.pending_brake_window.get("consumed", False)):
+            base = 40.0
+        if self.last_brake_release_at > 0:
+            age = max(now - self.last_brake_release_at, 0.0)
+            base += max(35.0 - (age * 180.0), 0.0)
+        base += min(self.stats.missed_brake_count * 12.0, 35.0)
+        base += min(self.stats.unstable_brake_count * 8.0, 25.0)
+        return round(max(min(base, 100.0), 0.0), 1)
 
     def _active_state_snapshot(self) -> dict[str, bool]:
         active_ids = set(self.active_state)
