@@ -82,6 +82,17 @@ class AppController:
     def training_state_snapshot(self) -> dict[str, Any]:
         return self.input_timing.training_state_snapshot()
 
+    def get_input_debug_snapshot(
+        self,
+        *,
+        overlay_update_interval_ms: int | None = None,
+        overlay_last_refresh_age_ms: int | None = None,
+    ) -> dict[str, Any]:
+        return self.input_timing.input_debug_snapshot(
+            overlay_update_interval_ms=overlay_update_interval_ms,
+            overlay_last_refresh_age_ms=overlay_last_refresh_age_ms,
+        )
+
     @property
     def live_protocol_events(self) -> list[dict[str, Any]]:
         return list(self.tracker.recent_protocol_events())
@@ -126,6 +137,7 @@ class AppController:
             "session_mode": self.current_session_mode,
             "input_state": dict(input_stats.active_state_snapshot or {}),
             "training_state": dict(input_stats.training_state_snapshot or {}),
+            "event_counts_by_input": dict(input_stats.event_counts_by_input or {}),
             "scroll_events": int(input_stats.scroll_events),
             "scroll_jump_events": int(input_stats.scroll_jump_events),
         }

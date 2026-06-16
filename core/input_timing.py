@@ -35,12 +35,14 @@ class RawInputEvent:
     action: str
     windows_timestamp: str
     monotonic_timestamp: float
+    monotonic_ns: int
     duration_seconds: float | None
     active_state: dict[str, bool]
+    body_state: str
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
-        data["monotonic_timestamp"] = round(self.monotonic_timestamp, 6)
+        data["monotonic_timestamp"] = round(self.monotonic_timestamp, 9)
         if self.duration_seconds is not None:
             data["duration_seconds"] = round(self.duration_seconds, 4)
         return data
@@ -98,6 +100,8 @@ class InputTimingStats:
     active_state_snapshot: dict[str, bool] = field(default_factory=dict)
     training_state_snapshot: dict[str, Any] = field(default_factory=dict)
     action_counts: dict[str, int] = field(default_factory=dict)
+    event_counts_by_input: dict[str, int] = field(default_factory=dict)
+    event_counts_by_action: dict[str, int] = field(default_factory=dict)
     raw_events_total: int = 0
     raw_events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -307,6 +311,42 @@ class InputTimingTracker:
         now = time.monotonic()
         return self.training_state.snapshot(now).to_dict()
 
+    def input_debug_snapshot(
+        self,
+        *,
+        overlay_update_interval_ms: int | None = None,
+        overlay_last_refresh_age_ms: int | None = None,
+    ) -> dict[str, Any]:
+        now = time.monotonic()
+        training_state = self.training_state.snapshot(now).to_dict()
+        brake_started_at = float(training_state.get("brake_started_at") or 0.0)
+        brake_window_remaining = 0.0
+        if brake_started_at > 0:
+            brake_window_remaining = max(
+                self.training_state.STABILIZATION_WINDOW_SECONDS - (now - brake_started_at),
+                0.0,
+            )
+        jump_until = float(training_state.get("jump_until") or 0.0)
+        jump_window_remaining = max(jump_until - now, 0.0)
+        return {
+            "enabled": bool(self.enabled),
+            "body_state": str(training_state.get("body_state") or "idle"),
+            "active_keys": self._active_state_snapshot(),
+            "recent_events": self.raw_events_to_dicts()[-80:],
+            "event_counts_by_input": dict(self.stats.event_counts_by_input),
+            "event_counts_by_action": dict(self.stats.event_counts_by_action),
+            "raw_events_total": int(self.raw_events_total),
+            "last_fire_state": str(training_state.get("last_fire_body_state") or "idle"),
+            "last_fire_at": float(training_state.get("last_fire_at") or 0.0),
+            "jump_window_active": jump_window_remaining > 0,
+            "jump_window_remaining_ms": int(round(jump_window_remaining * 1000)),
+            "brake_window_active": brake_window_remaining > 0,
+            "brake_window_remaining_ms": int(round(brake_window_remaining * 1000)),
+            "training_state": training_state,
+            "overlay_update_interval_ms": overlay_update_interval_ms,
+            "overlay_last_refresh_age_ms": overlay_last_refresh_age_ms,
+        }
+
     def has_forward(self) -> bool:
         return bool(self.active_actions().intersection(self.FORWARD_ACTIONS))
 
@@ -372,12 +412,12 @@ class InputTimingTracker:
         self._update_continuous_state(now)
 
         if input_id in self.active_state:
-            self._record_raw_event("key_down_repeat", input_id, action, now)
+            self._record_raw_event("down_repeat", input_id, action, now)
             return
 
         self.active_state[input_id] = ActiveInputState(input_id=input_id, action=action, started_at=now)
         self.training_state.process(action=action_definition, event_type="key_down", monotonic_timestamp=now)
-        self._record_raw_event("key_down", input_id, action, now)
+        self._record_raw_event("down", input_id, action, now)
         self.stats.key_presses += 1
         self.stats.useful_key_presses += 1
         self._register_action_count(action)
@@ -399,13 +439,13 @@ class InputTimingTracker:
         state = self.active_state.pop(input_id, None)
         if state is None:
             self.stats.orphan_key_ups += 1
-            self._record_raw_event("key_up_orphan", input_id, action, now)
+            self._record_raw_event("up_orphan", input_id, action, now)
             return
 
         self.jump_window_tracked_keys.discard(input_id)
         self.last_release_times[input_id] = now
         self.training_state.process(action=action_definition, event_type="key_up", monotonic_timestamp=now)
-        self._record_raw_event("key_up", input_id, action, now, now - state.started_at)
+        self._record_raw_event("up", input_id, action, now, now - state.started_at)
         self._complete_interval(input_id, action, state.started_at, now)
 
     def on_mouse_button(self, button_name: str, pressed: bool) -> None:
@@ -555,6 +595,7 @@ class InputTimingTracker:
         duration_seconds: float | None = None,
     ) -> None:
         self.raw_events_total += 1
+        training_snapshot = self.training_state.snapshot(monotonic_timestamp)
         event = RawInputEvent(
             event_index=self.raw_events_total,
             event_type=event_type,
@@ -562,13 +603,17 @@ class InputTimingTracker:
             action=action,
             windows_timestamp=datetime.now().isoformat(timespec="milliseconds"),
             monotonic_timestamp=monotonic_timestamp,
+            monotonic_ns=time.perf_counter_ns(),
             duration_seconds=duration_seconds,
             active_state=self._active_state_snapshot(),
+            body_state=training_snapshot.body_state,
         )
         self.raw_events.append(event)
         self.stats.raw_events_total = int(self.raw_events_total)
         self.stats.active_state_snapshot = dict(event.active_state)
-        self.stats.training_state_snapshot = self.training_state.snapshot(monotonic_timestamp).to_dict()
+        self.stats.training_state_snapshot = training_snapshot.to_dict()
+        self.stats.event_counts_by_input[input_id] = self.stats.event_counts_by_input.get(input_id, 0) + 1
+        self.stats.event_counts_by_action[action] = self.stats.event_counts_by_action.get(action, 0) + 1
 
     def _complete_interval(self, input_id: str, action: str, started_at: float, finished_at: float) -> None:
         duration = max(finished_at - started_at, 0.0)

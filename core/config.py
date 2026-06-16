@@ -117,6 +117,8 @@ class AppConfig:
     overlay_enabled: bool = False
     overlay_opacity: float = 0.85
     overlay_position: str = "top_right"
+    overlay_custom_x: int | None = None
+    overlay_custom_y: int | None = None
     overlay_scale: float = 1.0
     overlay_click_through: bool = False
     overlay_always_on_top: bool = True
@@ -309,10 +311,19 @@ class AppConfig:
             "bottom_left",
             "bottom_right",
             "center_top",
+            "custom",
         }
         overlay_position = str(data.get("overlay_position") or defaults.overlay_position).strip()
         if overlay_position not in valid_overlay_positions:
             overlay_position = defaults.overlay_position
+        overlay_custom_x = data.get("overlay_custom_x")
+        overlay_custom_y = data.get("overlay_custom_y")
+        try:
+            overlay_custom_x = int(overlay_custom_x) if overlay_custom_x is not None else None
+            overlay_custom_y = int(overlay_custom_y) if overlay_custom_y is not None else None
+        except (TypeError, ValueError):
+            overlay_custom_x = None
+            overlay_custom_y = None
 
         return cls(
             episode_timeout=_to_float(data.get("episode_timeout"), defaults.episode_timeout),
@@ -340,6 +351,8 @@ class AppConfig:
                 1.0,
             ),
             overlay_position=overlay_position,
+            overlay_custom_x=overlay_custom_x,
+            overlay_custom_y=overlay_custom_y,
             overlay_scale=min(
                 max(_to_float(data.get("overlay_scale"), defaults.overlay_scale), 0.75),
                 1.50,

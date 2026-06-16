@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import ctypes
+import json
 import os
 import sys
 from collections import Counter
@@ -67,7 +68,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.22.1"
+    APP_VERSION = "v0.22.2"
 
     def __init__(self) -> None:
         super().__init__()
@@ -86,10 +87,14 @@ class MainWindow(QWidget):
         self.weapon_selection_counts: dict[str, int] = {}
 
         self._build_ui()
-        self.overlay_window = OverlayWindow(self.controller.get_overlay_snapshot)
+        self.overlay_window = OverlayWindow(
+            self.controller.get_overlay_snapshot,
+            self.save_overlay_position,
+        )
         self._connect_signals()
         self.load_settings_into_form(self.app_config)
         self.refresh_runtime_identity()
+        self.refresh_input_debug_view()
         self.apply_overlay_settings()
         self._start_input_listeners()
 
@@ -317,6 +322,7 @@ class MainWindow(QWidget):
         root.addWidget(QLabel("Settings"))
         entries = [
             ("Keys / Input", self._make_scroll_page(self._build_keys_input_settings_page())),
+            ("Input Debug", self._make_scroll_page(self._build_input_debug_page())),
             ("Overlay", self._make_scroll_page(self._build_overlay_settings_page())),
             ("Modules / Extensions", self._make_scroll_page(self._build_modules_page())),
             ("Debug / Errors", self._make_scroll_page(self._build_debug_settings_page())),
@@ -516,6 +522,40 @@ class MainWindow(QWidget):
         root.addStretch(1)
         return page
 
+    def _build_input_debug_page(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        root.addWidget(QLabel("Input Debug"))
+
+        summary_group = QGroupBox("Live Input State")
+        summary_layout = QGridLayout(summary_group)
+        self.input_debug_body_state_label = QLabel("Body state: -")
+        self.input_debug_active_keys_label = QLabel("Active keys: -")
+        self.input_debug_last_fire_label = QLabel("Last fire state: -")
+        self.input_debug_windows_label = QLabel("Jump: - | Brake: -")
+        self.input_debug_overlay_label = QLabel("Overlay: -")
+        summary_layout.addWidget(self.input_debug_body_state_label, 0, 0)
+        summary_layout.addWidget(self.input_debug_active_keys_label, 0, 1)
+        summary_layout.addWidget(self.input_debug_last_fire_label, 1, 0)
+        summary_layout.addWidget(self.input_debug_windows_label, 1, 1)
+        summary_layout.addWidget(self.input_debug_overlay_label, 2, 0, 1, 2)
+        root.addWidget(summary_group)
+
+        self.input_debug_text = QPlainTextEdit()
+        self.input_debug_text.setReadOnly(True)
+        self.input_debug_text.setMinimumHeight(320)
+        root.addWidget(self.input_debug_text, stretch=1)
+
+        actions = QHBoxLayout()
+        self.refresh_input_debug_button = QPushButton("Refresh Input Debug")
+        self.copy_input_debug_button = QPushButton("Copy Input Debug")
+        self.input_debug_copy_status_label = QLabel("Ready.")
+        actions.addWidget(self.refresh_input_debug_button)
+        actions.addWidget(self.copy_input_debug_button)
+        actions.addWidget(self.input_debug_copy_status_label, stretch=1)
+        root.addLayout(actions)
+        return page
+
     def _build_modules_page(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
@@ -591,6 +631,7 @@ class MainWindow(QWidget):
         self.setting_overlay_position.addItem("Bottom left", "bottom_left")
         self.setting_overlay_position.addItem("Bottom right", "bottom_right")
         self.setting_overlay_position.addItem("Center top", "center_top")
+        self.setting_overlay_position.addItem("Custom", "custom")
         self.setting_overlay_click_through = QCheckBox(
             "Allow clicks to pass through the overlay"
         )
@@ -942,6 +983,8 @@ class MainWindow(QWidget):
         self.setting_overlay_always_on_top.toggled.connect(self.apply_overlay_settings)
         self.setting_overlay_minimal.toggled.connect(self.apply_overlay_settings)
         self.overlay_toggle_button.clicked.connect(self.toggle_overlay_preview)
+        self.refresh_input_debug_button.clicked.connect(self.refresh_input_debug_view)
+        self.copy_input_debug_button.clicked.connect(self.copy_input_debug)
         self.refresh_runtime_identity_button.clicked.connect(self.refresh_runtime_identity)
         self.copy_runtime_identity_button.clicked.connect(self.copy_runtime_identity)
 
@@ -1140,6 +1183,12 @@ class MainWindow(QWidget):
             "overlay_position": str(
                 self.setting_overlay_position.currentData() or "top_right"
             ),
+            "overlay_custom_x": self.app_config.overlay_custom_x
+            if str(self.setting_overlay_position.currentData() or "") == "custom"
+            else None,
+            "overlay_custom_y": self.app_config.overlay_custom_y
+            if str(self.setting_overlay_position.currentData() or "") == "custom"
+            else None,
             "overlay_scale": self.setting_overlay_scale.value(),
             "overlay_click_through": self.setting_overlay_click_through.isChecked(),
             "overlay_always_on_top": self.setting_overlay_always_on_top.isChecked(),
@@ -1231,6 +1280,95 @@ class MainWindow(QWidget):
         QApplication.clipboard().setText(text)
         self.runtime_copy_status_label.setText("Diagnostics copied to clipboard.")
 
+    def get_overlay_debug_timing(self) -> tuple[int, int | None]:
+        interval_ms = int(getattr(self.overlay_window, "UPDATE_INTERVAL_MS", 0) or 0)
+        age_ms = (
+            self.overlay_window.last_refresh_age_ms()
+            if hasattr(self.overlay_window, "last_refresh_age_ms")
+            else None
+        )
+        return interval_ms, age_ms
+
+    def get_input_debug_snapshot(self) -> dict[str, object]:
+        overlay_interval_ms, overlay_age_ms = self.get_overlay_debug_timing()
+        return self.controller.get_input_debug_snapshot(
+            overlay_update_interval_ms=overlay_interval_ms,
+            overlay_last_refresh_age_ms=overlay_age_ms,
+        )
+
+    def refresh_input_debug_view(self) -> None:
+        snapshot = self.get_input_debug_snapshot()
+        active_keys = [
+            key
+            for key, active in dict(snapshot.get("active_keys") or {}).items()
+            if active
+        ]
+        active_text = ", ".join(active_keys) if active_keys else "-"
+        overlay_age = snapshot.get("overlay_last_refresh_age_ms")
+        overlay_age_text = "-" if overlay_age is None else f"{overlay_age} ms"
+        self.input_debug_body_state_label.setText(f"Body state: {snapshot.get('body_state', '-')}")
+        self.input_debug_active_keys_label.setText(f"Active keys: {active_text}")
+        self.input_debug_last_fire_label.setText(f"Last fire state: {snapshot.get('last_fire_state', '-')}")
+        self.input_debug_windows_label.setText(
+            "Jump: "
+            f"{'active' if snapshot.get('jump_window_active') else 'inactive'} "
+            f"({snapshot.get('jump_window_remaining_ms', 0)} ms) | "
+            "Brake: "
+            f"{'active' if snapshot.get('brake_window_active') else 'inactive'} "
+            f"({snapshot.get('brake_window_remaining_ms', 0)} ms)"
+        )
+        self.input_debug_overlay_label.setText(
+            f"Overlay: interval {snapshot.get('overlay_update_interval_ms') or '-'} ms | "
+            f"last refresh age {overlay_age_text}"
+        )
+        self.input_debug_text.setPlainText(self.format_input_debug_snapshot(snapshot))
+        self.input_debug_copy_status_label.setText("Input debug refreshed.")
+
+    def copy_input_debug(self) -> None:
+        snapshot = self.get_input_debug_snapshot()
+        QApplication.clipboard().setText(json.dumps(snapshot, indent=2, sort_keys=True))
+        self.input_debug_copy_status_label.setText("Input debug copied to clipboard.")
+
+    @staticmethod
+    def format_input_debug_snapshot(snapshot: dict[str, object]) -> str:
+        lines = [
+            f"Capture enabled: {snapshot.get('enabled')}",
+            f"Body state: {snapshot.get('body_state')}",
+            f"Last fire state: {snapshot.get('last_fire_state')}",
+            f"Jump window active: {snapshot.get('jump_window_active')} ({snapshot.get('jump_window_remaining_ms')} ms)",
+            f"Brake window active: {snapshot.get('brake_window_active')} ({snapshot.get('brake_window_remaining_ms')} ms)",
+            f"Overlay interval: {snapshot.get('overlay_update_interval_ms')} ms",
+            f"Overlay last refresh age: {snapshot.get('overlay_last_refresh_age_ms')}",
+            "",
+            "Active keys:",
+            json.dumps(snapshot.get("active_keys") or {}, sort_keys=True),
+            "",
+            "Event counters by input:",
+            json.dumps(snapshot.get("event_counts_by_input") or {}, sort_keys=True),
+            "",
+            "Event counters by action:",
+            json.dumps(snapshot.get("event_counts_by_action") or {}, sort_keys=True),
+            "",
+            "Recent raw events:",
+        ]
+        events = list(snapshot.get("recent_events") or [])
+        if not events:
+            lines.append("No raw input events captured yet.")
+            return "\n".join(lines)
+
+        for event in events[-40:]:
+            if not isinstance(event, dict):
+                continue
+            lines.append(
+                "#"
+                f"{event.get('event_index')} "
+                f"{event.get('event_type')} "
+                f"{event.get('input_id')} -> {event.get('action')} "
+                f"body={event.get('body_state')} "
+                f"t={event.get('monotonic_timestamp')}"
+            )
+        return "\n".join(lines)
+
     def overlay_settings_from_form(self) -> dict[str, object]:
         return {
             "overlay_enabled": self.setting_overlay_enabled.isChecked(),
@@ -1238,6 +1376,12 @@ class MainWindow(QWidget):
             "overlay_position": str(
                 self.setting_overlay_position.currentData() or "top_right"
             ),
+            "overlay_custom_x": self.app_config.overlay_custom_x
+            if str(self.setting_overlay_position.currentData() or "") == "custom"
+            else None,
+            "overlay_custom_y": self.app_config.overlay_custom_y
+            if str(self.setting_overlay_position.currentData() or "") == "custom"
+            else None,
             "overlay_scale": self.setting_overlay_scale.value(),
             "overlay_click_through": self.setting_overlay_click_through.isChecked(),
             "overlay_always_on_top": self.setting_overlay_always_on_top.isChecked(),
@@ -1248,6 +1392,25 @@ class MainWindow(QWidget):
         if not hasattr(self, "overlay_window"):
             return
         self.overlay_window.apply_settings(self.overlay_settings_from_form())
+
+    def save_overlay_position(self, x: int, y: int) -> None:
+        payload = self.app_config.to_dict()
+        payload.update({
+            "overlay_position": "custom",
+            "overlay_custom_x": int(x),
+            "overlay_custom_y": int(y),
+        })
+        self.app_config = AppConfig.from_dict(payload)
+        save_config(self.app_config)
+        self.setting_overlay_position.blockSignals(True)
+        self.set_combo_data(self.setting_overlay_position, "custom")
+        self.setting_overlay_position.blockSignals(False)
+        self.overlay_window.settings.update({
+            "overlay_position": "custom",
+            "overlay_custom_x": int(x),
+            "overlay_custom_y": int(y),
+        })
+        self.settings_status_label.setText("Overlay position saved.")
 
     def toggle_overlay_preview(self) -> None:
         if self.overlay_window.isVisible():
@@ -1354,7 +1517,15 @@ class MainWindow(QWidget):
             getattr(self, "main_stack", None) is not None
             and getattr(self, "settings_stack", None) is not None
             and self.main_stack.currentWidget() is self.main_pages.get("settings")
-            and self.settings_stack.currentIndex() == 3
+            and self.settings_stack.currentIndex() == 4
+        )
+
+    def is_input_debug_view_active(self) -> bool:
+        return (
+            getattr(self, "main_stack", None) is not None
+            and getattr(self, "settings_stack", None) is not None
+            and self.main_stack.currentWidget() is self.main_pages.get("settings")
+            and self.settings_stack.currentIndex() == 1
         )
 
     def maybe_auto_start_session(self, trigger_input: str) -> bool:
@@ -2416,6 +2587,8 @@ class MainWindow(QWidget):
             f"scroll jump {input_stats.scroll_jump_events}"
         )
         self.refresh_protocol_debug_view()
+        if self.is_input_debug_view_active():
+            self.refresh_input_debug_view()
 
     # ------------------------------------------------------------------
     # Shutdown
