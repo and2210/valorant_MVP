@@ -10,9 +10,9 @@ from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLay
 
 
 class OverlayWindow(QWidget):
-    UPDATE_INTERVAL_MS = 150
-    SCROLL_HIGHLIGHT_TICKS = 4
-    INPUT_PULSE_TICKS = 3
+    UPDATE_INTERVAL_MS = 80
+    SCROLL_HIGHLIGHT_TICKS = 2
+    INPUT_PULSE_TICKS = 2
 
     def __init__(
         self,
@@ -60,6 +60,14 @@ class OverlayWindow(QWidget):
         self.session_label = QLabel("Session: OFF")
         self.mode_label = QLabel("Mode: Deathmatch")
         self.body_state_label = QLabel("State: idle")
+        self.session_dot.setText("")
+        self.session_dot.setFixedSize(10, 10)
+        self.session_label.hide()
+        self.mode_label.hide()
+        self.body_state_label.setText("No warnings")
+        self.body_state_label.setWordWrap(True)
+        self.body_state_label.setObjectName("OverlayWarningLabel")
+        self.warning_label = self.body_state_label
         status_row.addWidget(self.session_dot)
         status_row.addWidget(self.session_label)
         status_row.addStretch(1)
@@ -93,7 +101,7 @@ class OverlayWindow(QWidget):
             mouse_row.addWidget(label)
         panel_layout.addLayout(mouse_row)
 
-        self.compact_status_label = QLabel("Ready")
+        self.compact_status_label = QLabel("Ready · Deathmatch")
         panel_layout.addWidget(self.compact_status_label)
         root.addWidget(self.panel)
 
@@ -157,6 +165,11 @@ class OverlayWindow(QWidget):
                 color: #E5E7EB;
                 font-size: {font_size}px;
             }}
+            QLabel#OverlayWarningLabel {{
+                color: #FACC15;
+                background: transparent;
+                font-weight: bold;
+            }}
             QLabel[pressed="false"] {{
                 background-color: rgba(51, 65, 85, 210);
                 border: 1px solid rgba(148, 163, 184, 100);
@@ -209,6 +222,7 @@ class OverlayWindow(QWidget):
             "session_mode": str(snapshot.get("session_mode") or "deathmatch"),
             "input_state": dict(snapshot.get("input_state") or {}),
             "training_state": dict(snapshot.get("training_state") or {}),
+            "current_warnings": list(snapshot.get("current_warnings") or []),
             "input_pulses": dict(self._input_pulse_ticks),
             "scroll_active": self._scroll_ticks > 0,
             "scroll_jump_active": self._scroll_jump_ticks > 0,
@@ -230,19 +244,17 @@ class OverlayWindow(QWidget):
         active = bool(state["session_active"])
         mode = str(state["session_mode"])
         mode_label = "Ranked" if mode == "ranked" else "Deathmatch"
-        status = "Ranked audit" if mode == "ranked" else "Deathmatch Coins"
-        if not active:
-            status = "Ready"
+        status = "Active" if active else "Ready"
 
         self.session_dot.setStyleSheet(
-            f"color: {'#22C55E' if active else '#EF4444'}; background: transparent;"
+            "border-radius: 5px;"
+            f"background-color: {'#22C55E' if active else '#EF4444'};"
         )
-        self.session_label.setText(f"Session: {'ON' if active else 'OFF'}")
-        self.mode_label.setText(f"Mode: {mode_label}")
-        training_state = dict(state.get("training_state") or {})
-        body_state = str(training_state.get("body_state") or "idle")
-        self.body_state_label.setText(f"State: {body_state}")
-        self.compact_status_label.setText(status)
+        self.session_label.setText("")
+        self.mode_label.setText("")
+        warnings = [self._warning_label(name) for name in state.get("current_warnings", [])]
+        self.warning_label.setText(" | ".join(warnings[:3]) if warnings else "No warnings")
+        self.compact_status_label.setText(f"{status} · {mode_label}")
 
         input_state = dict(state["input_state"])
         input_pulses = dict(state["input_pulses"])
@@ -258,6 +270,17 @@ class OverlayWindow(QWidget):
             or int(input_pulses.get("jump", 0)) > 0
         )
         self._set_pressed(self.key_labels["jump"], jump_pressed)
+
+    @staticmethod
+    def _warning_label(name: object) -> str:
+        labels = {
+            "diagonal_movement": "Diagonal movement",
+            "fire_while_moving": "Firing while moving",
+            "fire_while_jumping": "Firing while jumping",
+            "fire_during_unstable_brake": "Firing during unstable brake",
+            "long_strafe_hold": "Long strafe hold / slow release",
+        }
+        return labels.get(str(name), str(name).replace("_", " ").title())
 
     def _set_pressed(self, label: QLabel, pressed: bool) -> None:
         if bool(label.property("pressed")) == pressed:

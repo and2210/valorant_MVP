@@ -8,7 +8,7 @@ import traceback
 from pathlib import Path
 
 
-APP_VERSION = "v0.22.2"
+APP_VERSION = "v0.22.3"
 PROJECT_ROOT = Path(__file__).resolve().parent
 APP_FILE = PROJECT_ROOT / "app.py"
 LOG_FILE = PROJECT_ROOT / "launch_error.log"

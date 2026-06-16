@@ -54,7 +54,7 @@ from core.tracker_importer import (
     load_tracker_ranked_matches,
 )
 from ui.screens.history_screen import HistoryScreen
-from ui.screens.inventory_screen import InventoryScreen
+from ui.screens.inventory_screen import InventoryScreen, WeaponButton
 from ui.overlay_window import OverlayWindow
 
 
@@ -68,7 +68,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.22.2"
+    APP_VERSION = "v0.22.3"
 
     def __init__(self) -> None:
         super().__init__()
@@ -321,7 +321,7 @@ class MainWindow(QWidget):
         root = QVBoxLayout(page)
         root.addWidget(QLabel("Settings"))
         entries = [
-            ("Keys / Input", self._make_scroll_page(self._build_keys_input_settings_page())),
+            ("Input Settings", self._make_scroll_page(self._build_keys_input_settings_page())),
             ("Input Debug", self._make_scroll_page(self._build_input_debug_page())),
             ("Overlay", self._make_scroll_page(self._build_overlay_settings_page())),
             ("Modules / Extensions", self._make_scroll_page(self._build_modules_page())),
@@ -534,11 +534,14 @@ class MainWindow(QWidget):
         self.input_debug_last_fire_label = QLabel("Last fire state: -")
         self.input_debug_windows_label = QLabel("Jump: - | Brake: -")
         self.input_debug_overlay_label = QLabel("Overlay: -")
+        self.input_debug_warnings_label = QLabel("Warnings: -")
+        self.input_debug_warnings_label.setWordWrap(True)
         summary_layout.addWidget(self.input_debug_body_state_label, 0, 0)
         summary_layout.addWidget(self.input_debug_active_keys_label, 0, 1)
         summary_layout.addWidget(self.input_debug_last_fire_label, 1, 0)
         summary_layout.addWidget(self.input_debug_windows_label, 1, 1)
         summary_layout.addWidget(self.input_debug_overlay_label, 2, 0, 1, 2)
+        summary_layout.addWidget(self.input_debug_warnings_label, 3, 0, 1, 2)
         root.addWidget(summary_group)
 
         self.input_debug_text = QPlainTextEdit()
@@ -1324,6 +1327,9 @@ class MainWindow(QWidget):
             f"Overlay: interval {snapshot.get('overlay_update_interval_ms') or '-'} ms | "
             f"last refresh age {overlay_age_text}"
         )
+        self.input_debug_warnings_label.setText(
+            f"Warnings: {self.format_warning_summary(snapshot)}"
+        )
         self.input_debug_text.setPlainText(self.format_input_debug_snapshot(snapshot))
         self.input_debug_copy_status_label.setText("Input debug refreshed.")
 
@@ -1381,6 +1387,7 @@ class MainWindow(QWidget):
             f"Brake window active: {snapshot.get('brake_window_active')} ({snapshot.get('brake_window_remaining_ms')} ms)",
             f"Overlay interval: {snapshot.get('overlay_update_interval_ms')} ms",
             f"Overlay last refresh age: {snapshot.get('overlay_last_refresh_age_ms')}",
+            f"Current warnings: {MainWindow.format_warning_summary(snapshot)}",
             "",
             "Active keys:",
             json.dumps(snapshot.get("active_keys") or {}, sort_keys=True),
@@ -1390,6 +1397,9 @@ class MainWindow(QWidget):
             "",
             "Event counters by action:",
             json.dumps(snapshot.get("event_counts_by_action") or {}, sort_keys=True),
+            "",
+            "Warning counters:",
+            json.dumps(snapshot.get("warning_counts") or {}, sort_keys=True),
             "",
             "Recent raw events:",
         ]
@@ -1410,6 +1420,31 @@ class MainWindow(QWidget):
                 f"t={event.get('monotonic_timestamp')}"
             )
         return "\n".join(lines)
+
+    @staticmethod
+    def warning_label(name: object) -> str:
+        labels = {
+            "diagonal_movement": "Diagonal movement",
+            "fire_while_moving": "Firing while moving",
+            "fire_while_jumping": "Firing while jumping",
+            "fire_during_unstable_brake": "Firing during unstable brake",
+            "long_strafe_hold": "Long strafe hold / slow release",
+        }
+        return labels.get(str(name), str(name).replace("_", " ").title())
+
+    @staticmethod
+    def format_warning_summary(snapshot: dict[str, object]) -> str:
+        current = [
+            MainWindow.warning_label(name)
+            for name in list(snapshot.get("current_warnings") or [])
+        ]
+        counts = dict(snapshot.get("warning_counts") or {})
+        count_text = ", ".join(
+            f"{MainWindow.warning_label(name)}={count}"
+            for name, count in sorted(counts.items())
+        )
+        active_text = ", ".join(current) if current else "none active"
+        return f"{active_text} | counts: {count_text or 'none'}"
 
     def overlay_settings_from_form(self) -> dict[str, object]:
         return {
@@ -1755,6 +1790,16 @@ class MainWindow(QWidget):
             self.weapon_selection_counts[weapon_name] = current + 1
         self.populate_weapon_combo()
 
+    def decrement_weapon_selection(self, weapon_name: str) -> None:
+        current = int(self.weapon_selection_counts.get(weapon_name, 0))
+        if current <= 0:
+            return
+        if current == 1:
+            self.weapon_selection_counts.pop(weapon_name, None)
+        else:
+            self.weapon_selection_counts[weapon_name] = current - 1
+        self.populate_weapon_combo()
+
     def refresh_import_mode(self, ranked: bool) -> None:
         mode = self.ranked_import_mode if ranked else self.dm_import_mode
         season = self.ranked_season_selector if ranked else self.dm_season_selector
@@ -1989,14 +2034,15 @@ class MainWindow(QWidget):
                 model_item = self.weapon_combo.model().item(index)
                 if model_item is not None:
                     model_item.setEnabled(False)
-            button = QPushButton(item["name"])
+            button = WeaponButton(item["name"])
             button.setToolTip(
-                f"{item['name']} | {item['cost']} Coins | owned {item.get('owned_quantity', 0)}"
+                f"{item['name']} | {item['cost']} Coins | owned {item.get('owned_quantity', 0)} | right-click removes one selected"
             )
             selected = int(self.weapon_selection_counts.get(item["name"], 0))
             if selected:
                 button.setText(f"{item['name']} ({selected})")
             button.clicked.connect(lambda _=False, name=item["name"]: self.select_weapon(name))
+            button.right_clicked.connect(lambda name=item["name"]: self.decrement_weapon_selection(name))
             group_names = ["Sidearms", "SMGs / Shotguns", "Rifles", "Snipers / Heavies"]
             group_index = group_names.index(item.get("group")) if item.get("group") in group_names else 0
             getattr(self.inventory_screen, f"weapon_group_layout_{group_index}").addWidget(button)

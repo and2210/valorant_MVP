@@ -102,6 +102,8 @@ class InputTimingStats:
     action_counts: dict[str, int] = field(default_factory=dict)
     event_counts_by_input: dict[str, int] = field(default_factory=dict)
     event_counts_by_action: dict[str, int] = field(default_factory=dict)
+    warning_counts: dict[str, int] = field(default_factory=dict)
+    current_warnings: list[str] = field(default_factory=list)
     raw_events_total: int = 0
     raw_events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -133,6 +135,8 @@ class InputTimingTracker:
     JUMP_WINDOW_SECONDS = 1.50
     PRE_JUMP_GRACE_SECONDS = 0.15
     RECENT_FORWARD_RELEASE_SECONDS = 0.50
+    LONG_LATERAL_HOLD_SECONDS = 0.45
+    WARNING_LATCH_SECONDS = 1.20
 
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or load_config()
@@ -154,6 +158,7 @@ class InputTimingTracker:
         self.jump_window_until = 0.0
         self.last_jump_intent_at = 0.0
         self.jump_window_tracked_keys: set[str] = set()
+        self.warning_latches: dict[str, float] = {}
         self._reset_raw_event_buffer()
 
     def _read_capture_mode(self) -> str:
@@ -285,6 +290,8 @@ class InputTimingTracker:
         self.jump_window_until = 0.0
         self.last_jump_intent_at = 0.0
         self.jump_window_tracked_keys = set()
+        self.warning_latches = {}
+        self.stats.current_warnings = self._current_warnings(self.last_state_update)
 
     def snapshot(self) -> InputTimingStats:
         if not self.enabled:
@@ -296,6 +303,7 @@ class InputTimingTracker:
         self.stats.raw_events = []
         self.stats.active_state_snapshot = self._active_state_snapshot()
         self.stats.training_state_snapshot = self.training_state.snapshot(now).to_dict()
+        self.stats.current_warnings = self._current_warnings(now)
         return self.stats
 
     def active_input_ids(self) -> set[str]:
@@ -328,6 +336,8 @@ class InputTimingTracker:
             )
         jump_until = float(training_state.get("jump_until") or 0.0)
         jump_window_remaining = max(jump_until - now, 0.0)
+        current_warnings = self._current_warnings(now)
+        self.stats.current_warnings = list(current_warnings)
         return {
             "enabled": bool(self.enabled),
             "body_state": str(training_state.get("body_state") or "idle"),
@@ -335,6 +345,8 @@ class InputTimingTracker:
             "recent_events": self.raw_events_to_dicts()[-80:],
             "event_counts_by_input": dict(self.stats.event_counts_by_input),
             "event_counts_by_action": dict(self.stats.event_counts_by_action),
+            "warning_counts": dict(self.stats.warning_counts),
+            "current_warnings": current_warnings,
             "raw_events_total": int(self.raw_events_total),
             "last_fire_state": str(training_state.get("last_fire_body_state") or "idle"),
             "last_fire_at": float(training_state.get("last_fire_at") or 0.0),
@@ -398,6 +410,19 @@ class InputTimingTracker:
             active_state_snapshot=self._active_state_snapshot(),
         )
 
+    def _note_diagonal_entry(self, now: float) -> None:
+        currently_diagonal = self.has_forward() and self.has_lateral()
+        if not currently_diagonal or self.diagonal_active:
+            return
+
+        self.last_diagonal_entry_at = now
+        if self.is_jump_related_window_active(now):
+            self.stats.jump_strafe_count += 1
+        else:
+            self.stats.diagonal_entries += 1
+            self._register_warning("diagonal_movement", now)
+        self.diagonal_active = True
+
     def on_key_press(self, raw_key: str) -> None:
         if not self.enabled:
             return
@@ -422,6 +447,7 @@ class InputTimingTracker:
         self.stats.useful_key_presses += 1
         self._register_action_count(action)
         self.note_jump_window_movement(input_id, now)
+        self._note_diagonal_entry(now)
 
     def on_key_release(self, raw_key: str) -> None:
         if not self.enabled:
@@ -447,6 +473,8 @@ class InputTimingTracker:
         self.training_state.process(action=action_definition, event_type="key_up", monotonic_timestamp=now)
         self._record_raw_event("up", input_id, action, now, now - state.started_at)
         self._complete_interval(input_id, action, state.started_at, now)
+        if not (self.has_forward() and self.has_lateral()):
+            self.diagonal_active = False
 
     def on_mouse_button(self, button_name: str, pressed: bool) -> None:
         if not self.enabled:
@@ -474,6 +502,13 @@ class InputTimingTracker:
 
             if action == "fire":
                 self.stats.lmb_down_count += 1
+                fire_state = str(self.training_state.snapshot(now).last_fire_body_state)
+                if fire_state == "moving":
+                    self._register_warning("fire_while_moving", now)
+                elif fire_state == "jumping":
+                    self._register_warning("fire_while_jumping", now)
+                elif fire_state == "braking":
+                    self._register_warning("fire_during_unstable_brake", now)
                 if self.has_forward():
                     self.stats.shots_while_forward += 1
                 if self.has_action("crouch"):
@@ -546,6 +581,7 @@ class InputTimingTracker:
                 self.stats.jump_strafe_count += 1
             else:
                 self.stats.diagonal_entries += 1
+                self._register_warning("diagonal_movement", now)
         self.diagonal_active = currently_diagonal
         self.last_state_update = now
 
@@ -628,6 +664,8 @@ class InputTimingTracker:
 
         if action == "fire":
             self._register_fire_interval(interval)
+        elif action in self.LATERAL_ACTIONS and duration > self.LONG_LATERAL_HOLD_SECONDS:
+            self._register_warning("long_strafe_hold", finished_at)
 
     def _register_fire_interval(self, interval: InputInterval) -> None:
         duration = interval.duration_seconds
@@ -692,3 +730,43 @@ class InputTimingTracker:
             "mouse_left": "mouse_left" in active_ids,
             "mouse_right": "mouse_right" in active_ids,
         }
+
+    def _register_warning(self, warning_name: str, now: float) -> None:
+        self.stats.warning_counts[warning_name] = self.stats.warning_counts.get(warning_name, 0) + 1
+        self.warning_latches[warning_name] = now + self.WARNING_LATCH_SECONDS
+
+    def _current_warnings(self, now: float) -> list[str]:
+        warnings: set[str] = {
+            name
+            for name, expires_at in self.warning_latches.items()
+            if expires_at > now
+        }
+        self.warning_latches = {
+            name: expires_at
+            for name, expires_at in self.warning_latches.items()
+            if expires_at > now
+        }
+
+        active = self._active_state_snapshot()
+        if (active.get("w") or active.get("s")) and (active.get("a") or active.get("d")):
+            warnings.add("diagonal_movement")
+
+        for state in self.active_state.values():
+            if (
+                state.action in self.LATERAL_ACTIONS
+                and (now - state.started_at) > self.LONG_LATERAL_HOLD_SECONDS
+            ):
+                warnings.add("long_strafe_hold")
+                break
+
+        training_state = self.training_state.snapshot(now).to_dict()
+        if training_state.get("firing"):
+            body_state = str(training_state.get("firing_body_state") or "")
+            if body_state == "moving":
+                warnings.add("fire_while_moving")
+            elif body_state == "jumping":
+                warnings.add("fire_while_jumping")
+            elif body_state == "braking":
+                warnings.add("fire_during_unstable_brake")
+
+        return sorted(warnings)

@@ -138,6 +138,8 @@ class AppController:
             "input_state": dict(input_stats.active_state_snapshot or {}),
             "training_state": dict(input_stats.training_state_snapshot or {}),
             "event_counts_by_input": dict(input_stats.event_counts_by_input or {}),
+            "current_warnings": list(input_stats.current_warnings or []),
+            "warning_counts": dict(input_stats.warning_counts or {}),
             "scroll_events": int(input_stats.scroll_events),
             "scroll_jump_events": int(input_stats.scroll_jump_events),
         }
