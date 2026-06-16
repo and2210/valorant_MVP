@@ -68,7 +68,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.22.6.1"
+    APP_VERSION = "v0.22.7"
 
     def __init__(self) -> None:
         super().__init__()
@@ -1344,6 +1344,8 @@ class MainWindow(QWidget):
             f"({snapshot.get('diagonal_time_ms', 0)} / {snapshot.get('movement_time_ms', 0)} ms) | "
             f"Brake {snapshot.get('missed_brake_ratio_percent', 0.0)}% "
             f"({snapshot.get('missed_brake_count', 0)} / {snapshot.get('brake_opportunity_count', 0)}) | "
+            f"Context {snapshot.get('effective_input_context', '-')} | "
+            f"LMB {snapshot.get('last_lmb_classification', '-')} | "
             f"Pressure Diag {snapshot.get('diagonal_pressure_percent', 0.0)}% | "
             f"Brake {snapshot.get('brake_pressure_percent', 0.0)}%"
         )
@@ -1403,6 +1405,10 @@ class MainWindow(QWidget):
             f"Capture enabled: {snapshot.get('enabled')}",
             f"Body state: {snapshot.get('body_state')}",
             f"Last fire state: {snapshot.get('last_fire_state')}",
+            f"Last strong context: {snapshot.get('last_strong_context')}",
+            f"Temporary context: {snapshot.get('temporary_context') or '-'} ({snapshot.get('context_expires_in_ms')} ms)",
+            f"Effective input context: {snapshot.get('effective_input_context')}",
+            f"Last LMB classification: {snapshot.get('last_lmb_classification')}",
             f"Jump window active: {snapshot.get('jump_window_active')} ({snapshot.get('jump_window_remaining_ms')} ms)",
             f"Brake window active: {snapshot.get('brake_window_active')} ({snapshot.get('brake_window_remaining_ms')} ms)",
             f"Overlay interval: {snapshot.get('overlay_update_interval_ms')} ms",

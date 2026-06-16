@@ -39,6 +39,8 @@ class RawInputEvent:
     duration_seconds: float | None
     active_state: dict[str, bool]
     body_state: str
+    effective_input_context: str = "precision_weapon"
+    last_lmb_classification: str = "ignored_safe"
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -57,6 +59,9 @@ class FireEvaluationContext:
     forward_released_recently: bool
     within_jump_window: bool
     diagonal_recent_entry: bool
+    combat_relevant: bool
+    effective_input_context: str
+    last_lmb_classification: str
     active_state_snapshot: dict[str, bool]
 
     def to_dict(self) -> dict[str, Any]:
@@ -104,8 +109,20 @@ class InputTimingStats:
     last_expected_brake_key: str = ""
     last_missed_brake_direction: str = ""
     last_release_to_fire_ms: int | None = None
+    last_strong_context: str = "precision_weapon"
+    temporary_context: str = ""
+    effective_input_context: str = "precision_weapon"
+    context_expires_in_ms: int = 0
+    last_lmb_classification: str = "ignored_safe"
     diagonal_pressure_percent: float = 0.0
     brake_pressure_percent: float = 0.0
+    combat_diagonal_entries: int = 0
+    combat_fire_while_moving_count: int = 0
+    combat_fire_while_jumping_count: int = 0
+    combat_fire_during_unstable_brake_count: int = 0
+    combat_brake_opportunity_count: int = 0
+    combat_missed_brake_count: int = 0
+    combat_unstable_brake_count: int = 0
     active_state_snapshot: dict[str, bool] = field(default_factory=dict)
     training_state_snapshot: dict[str, Any] = field(default_factory=dict)
     action_counts: dict[str, int] = field(default_factory=dict)
@@ -148,6 +165,17 @@ class InputTimingTracker:
     LONG_LATERAL_HOLD_SECONDS = 0.45
     WARNING_LATCH_SECONDS = 1.20
     BRAKE_EXPECTATION_WINDOW_SECONDS = 0.18
+    PRESSURE_DECAY_PER_SECOND = 30.0
+    CLEAN_PRESSURE_DECAY_PER_SECOND = 18.0
+    CONTEXT_TIMEOUTS = {
+        "ability_q": 3.5,
+        "smoke_panel": 8.0,
+        "ability_c": 1.3,
+        "ultimate": 2.0,
+        "interaction": 1.5,
+        "communication_neutral": 1.2,
+        "interface_neutral": 1.2,
+    }
 
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or load_config()
@@ -172,6 +200,10 @@ class InputTimingTracker:
         self.warning_latches: dict[str, float] = {}
         self.pending_brake_window: dict[str, Any] | None = None
         self.last_brake_release_at = 0.0
+        self.last_strong_context = "precision_weapon"
+        self.temporary_context = ""
+        self.temporary_context_expires_at = 0.0
+        self.active_lmb_classification = "ignored_safe"
         self._reset_raw_event_buffer()
 
     def _read_capture_mode(self) -> str:
@@ -306,6 +338,15 @@ class InputTimingTracker:
         self.warning_latches = {}
         self.pending_brake_window = None
         self.last_brake_release_at = 0.0
+        self.last_strong_context = "precision_weapon"
+        self.temporary_context = ""
+        self.temporary_context_expires_at = 0.0
+        self.active_lmb_classification = "ignored_safe"
+        self.stats.last_strong_context = self.last_strong_context
+        self.stats.temporary_context = ""
+        self.stats.effective_input_context = self.last_strong_context
+        self.stats.context_expires_in_ms = 0
+        self.stats.last_lmb_classification = "ignored_safe"
         self.stats.current_warnings = self._current_warnings(self.last_state_update)
 
     def snapshot(self) -> InputTimingStats:
@@ -319,6 +360,7 @@ class InputTimingTracker:
         self.stats.active_state_snapshot = self._active_state_snapshot()
         self.stats.training_state_snapshot = self.training_state.snapshot(now).to_dict()
         self.stats.current_warnings = self._current_warnings(now)
+        self._sync_context_stats(now)
         return self.stats
 
     def active_input_ids(self) -> set[str]:
@@ -353,6 +395,7 @@ class InputTimingTracker:
         jump_window_remaining = max(jump_until - now, 0.0)
         current_warnings = self._current_warnings(now)
         self.stats.current_warnings = list(current_warnings)
+        self._sync_context_stats(now)
         movement_time_ms = int(round(self.stats.movement_seconds * 1000))
         diagonal_time_ms = int(round(self.stats.diagonal_seconds * 1000))
         diagonal_ratio_percent = (
@@ -388,6 +431,11 @@ class InputTimingTracker:
             "last_expected_brake_key": str(self.stats.last_expected_brake_key or ""),
             "last_missed_brake_direction": str(self.stats.last_missed_brake_direction or ""),
             "last_release_to_fire_ms": self.stats.last_release_to_fire_ms,
+            "last_strong_context": self.stats.last_strong_context,
+            "temporary_context": self.stats.temporary_context,
+            "effective_input_context": self.stats.effective_input_context,
+            "context_expires_in_ms": self.stats.context_expires_in_ms,
+            "last_lmb_classification": self.stats.last_lmb_classification,
             "diagonal_pressure_percent": float(self.stats.diagonal_pressure_percent),
             "brake_pressure_percent": float(self.stats.brake_pressure_percent),
             "jump_window_active": jump_window_remaining > 0,
@@ -420,6 +468,14 @@ class InputTimingTracker:
             return False
         return (self.last_jump_intent_at - self.PRE_JUMP_GRACE_SECONDS) <= current_time <= self.jump_window_until
 
+    def is_combat_context_active(self, now: float | None = None) -> bool:
+        return self.effective_input_context(now) == "precision_weapon"
+
+    def effective_input_context(self, now: float | None = None) -> str:
+        current_time = time.monotonic() if now is None else now
+        self._expire_temporary_context(current_time)
+        return self.temporary_context or self.last_strong_context
+
     def note_jump_window_movement(self, key_name: str, now: float | None = None) -> bool:
         input_id = self.normalize_input_id(key_name)
         if input_id not in MOVEMENT_KEYS:
@@ -447,6 +503,9 @@ class InputTimingTracker:
             forward_released_recently=self._had_recent_forward_release(current_time),
             within_jump_window=self.is_jump_related_window_active(current_time),
             diagonal_recent_entry=self.last_diagonal_entry_at > 0 and (current_time - self.last_diagonal_entry_at) <= self.PRE_JUMP_GRACE_SECONDS,
+            combat_relevant=self.is_combat_context_active(current_time),
+            effective_input_context=self.effective_input_context(current_time),
+            last_lmb_classification=self.stats.last_lmb_classification,
             active_state_snapshot=self._active_state_snapshot(),
         )
 
@@ -458,9 +517,11 @@ class InputTimingTracker:
         self.last_diagonal_entry_at = now
         if self.is_jump_related_window_active(now):
             self.stats.jump_strafe_count += 1
-        else:
+        elif self.is_combat_context_active(now):
             self.stats.diagonal_entries += 1
+            self.stats.combat_diagonal_entries += 1
             self._register_warning("diagonal_movement", now)
+            self._bump_diagonal_pressure(34.0)
         self.diagonal_active = True
 
     def on_key_press(self, raw_key: str) -> None:
@@ -480,6 +541,7 @@ class InputTimingTracker:
             self._record_raw_event("down_repeat", input_id, action, now)
             return
 
+        self._apply_context_key_down(input_id, action, now)
         self.active_state[input_id] = ActiveInputState(input_id=input_id, action=action, started_at=now)
         self.training_state.process(action=action_definition, event_type="key_down", monotonic_timestamp=now)
         self._record_raw_event("down", input_id, action, now)
@@ -519,6 +581,7 @@ class InputTimingTracker:
         self._note_brake_release(input_id, now)
         if not (self.has_forward() and self.has_lateral()):
             self.diagonal_active = False
+        self._apply_context_key_up(input_id, action, now)
 
     def on_mouse_button(self, button_name: str, pressed: bool) -> None:
         if not self.enabled:
@@ -538,22 +601,40 @@ class InputTimingTracker:
                 self._record_raw_event("mouse_down_repeat", input_id, action, now)
                 return
 
-            self.active_state[input_id] = ActiveInputState(input_id=input_id, action=action, started_at=now)
-            self.training_state.process(action=action_definition, event_type="mouse_down", monotonic_timestamp=now)
+            lmb_classification = "ignored_safe"
+            if input_id == "mouse_left":
+                lmb_classification = self._classify_lmb(now)
+                self.active_lmb_classification = lmb_classification
+                self.stats.last_lmb_classification = lmb_classification
+            state_action = action
+            if input_id == "mouse_left" and lmb_classification != "weapon_fire":
+                state_action = lmb_classification
+
+            self.active_state[input_id] = ActiveInputState(input_id=input_id, action=state_action, started_at=now)
+            if action != "fire" or lmb_classification == "weapon_fire":
+                self.training_state.process(action=action_definition, event_type="mouse_down", monotonic_timestamp=now)
             self._record_raw_event("mouse_down", input_id, action, now)
             self.stats.mouse_presses += 1
             self._register_action_count(action)
 
             if action == "fire":
                 self.stats.lmb_down_count += 1
+                if lmb_classification != "weapon_fire":
+                    if lmb_classification in {"ability_cast", "interaction"}:
+                        self._clear_temporary_context(now)
+                    return
                 fire_state = str(self.training_state.snapshot(now).last_fire_body_state)
                 self._evaluate_brake_opportunity(now, fire_state)
                 if fire_state == "moving":
+                    self.stats.combat_fire_while_moving_count += 1
                     self._register_warning("fire_while_moving", now)
                 elif fire_state == "jumping":
+                    self.stats.combat_fire_while_jumping_count += 1
                     self._register_warning("fire_while_jumping", now)
                 elif fire_state == "braking":
+                    self.stats.combat_fire_during_unstable_brake_count += 1
                     self._register_warning("fire_during_unstable_brake", now)
+                    self._bump_brake_pressure(28.0)
                 if self.has_forward():
                     self.stats.shots_while_forward += 1
                 if self.has_action("crouch"):
@@ -568,9 +649,13 @@ class InputTimingTracker:
         if action == "fire":
             self.stats.lmb_up_count += 1
 
-        self.training_state.process(action=action_definition, event_type="mouse_up", monotonic_timestamp=now)
+        if action != "fire" or state.action == "fire":
+            self.training_state.process(action=action_definition, event_type="mouse_up", monotonic_timestamp=now)
         self._record_raw_event("mouse_up", input_id, action, now, now - state.started_at)
-        self._complete_interval(input_id, action, state.started_at, now)
+        if action != "fire" or state.action == "fire":
+            self._complete_interval(input_id, action, state.started_at, now)
+        if input_id == "mouse_left":
+            self.active_lmb_classification = "ignored_safe"
 
     def on_scroll(self, direction: str) -> None:
         if not self.enabled:
@@ -605,6 +690,7 @@ class InputTimingTracker:
 
         has_forward = self.has_forward()
         has_lateral = self.has_lateral()
+        combat_relevant = self.is_combat_context_active(now)
 
         if has_forward:
             self.stats.forward_seconds += elapsed
@@ -626,11 +712,15 @@ class InputTimingTracker:
             self.last_diagonal_entry_at = now
             if self.is_jump_related_window_active(now):
                 self.stats.jump_strafe_count += 1
-            else:
+            elif combat_relevant:
                 self.stats.diagonal_entries += 1
+                self.stats.combat_diagonal_entries += 1
                 self._register_warning("diagonal_movement", now)
+                self._bump_diagonal_pressure(34.0)
         self.diagonal_active = currently_diagonal
         self._expire_brake_window(now)
+        self._decay_pressure(elapsed, combat_relevant)
+        self._sync_context_stats(now)
         self.last_state_update = now
 
     def _register_action_count(self, action: str) -> None:
@@ -691,6 +781,8 @@ class InputTimingTracker:
             duration_seconds=duration_seconds,
             active_state=self._active_state_snapshot(),
             body_state=training_snapshot.body_state,
+            effective_input_context=self.effective_input_context(monotonic_timestamp),
+            last_lmb_classification=self.stats.last_lmb_classification,
         )
         self.raw_events.append(event)
         self.stats.raw_events_total = int(self.raw_events_total)
@@ -799,6 +891,8 @@ class InputTimingTracker:
     def _evaluate_brake_opportunity(self, now: float, fire_state: str) -> None:
         if not self.pending_brake_window:
             return
+        if not self.is_combat_context_active(now):
+            return
         self._expire_brake_window(now)
         if not self.pending_brake_window:
             return
@@ -811,35 +905,137 @@ class InputTimingTracker:
         opposite_pressed = bool(self.pending_brake_window.get("opposite_pressed", False))
 
         self.stats.brake_opportunity_count += 1
+        self.stats.combat_brake_opportunity_count += 1
         self.stats.last_expected_brake_key = expected_key
         self.stats.last_release_to_fire_ms = int(round(max(now - released_at, 0.0) * 1000))
         if opposite_pressed:
             if fire_state != "braking":
                 self.stats.unstable_brake_count += 1
+                self.stats.combat_unstable_brake_count += 1
+                self._bump_brake_pressure(24.0)
         elif fire_state != "braking":
             self.stats.missed_brake_count += 1
+            self.stats.combat_missed_brake_count += 1
             self.stats.last_missed_brake_direction = "left" if released_key == "a" else "right"
+            self._bump_brake_pressure(42.0)
         self.pending_brake_window["consumed"] = True
 
     def _calculate_diagonal_pressure(self, now: float) -> float:
-        base = 0.0
-        if self.diagonal_active or (self.has_forward() and self.has_lateral()):
-            base = 55.0
-        base += min(self.stats.diagonal_entries * 4.0, 25.0)
-        if self.last_diagonal_entry_at > 0 and (now - self.last_diagonal_entry_at) <= self.PRE_JUMP_GRACE_SECONDS:
-            base += 10.0
-        return round(max(min(base, 100.0), 0.0), 1)
+        return round(max(min(self.stats.diagonal_pressure_percent, 100.0), 0.0), 1)
 
     def _calculate_brake_pressure(self, now: float) -> float:
-        base = 0.0
-        if self.pending_brake_window and not bool(self.pending_brake_window.get("consumed", False)):
-            base = 40.0
-        if self.last_brake_release_at > 0:
-            age = max(now - self.last_brake_release_at, 0.0)
-            base += max(35.0 - (age * 180.0), 0.0)
-        base += min(self.stats.missed_brake_count * 12.0, 35.0)
-        base += min(self.stats.unstable_brake_count * 8.0, 25.0)
-        return round(max(min(base, 100.0), 0.0), 1)
+        return round(max(min(self.stats.brake_pressure_percent, 100.0), 0.0), 1)
+
+    def _bump_diagonal_pressure(self, amount: float) -> None:
+        self.stats.diagonal_pressure_percent = min(
+            float(self.stats.diagonal_pressure_percent) + amount,
+            100.0,
+        )
+
+    def _bump_brake_pressure(self, amount: float) -> None:
+        self.stats.brake_pressure_percent = min(
+            float(self.stats.brake_pressure_percent) + amount,
+            100.0,
+        )
+
+    def _decay_pressure(self, elapsed: float, combat_relevant: bool) -> None:
+        if elapsed <= 0:
+            return
+        base_decay = elapsed * self.PRESSURE_DECAY_PER_SECOND
+        diagonal_clean_decay = 0.0
+        brake_clean_decay = 0.0
+        if combat_relevant and not (self.has_forward() and self.has_lateral()):
+            diagonal_clean_decay = elapsed * self.CLEAN_PRESSURE_DECAY_PER_SECOND
+        if combat_relevant and not self.pending_brake_window:
+            brake_clean_decay = elapsed * self.CLEAN_PRESSURE_DECAY_PER_SECOND
+        self.stats.diagonal_pressure_percent = max(
+            float(self.stats.diagonal_pressure_percent) - base_decay - diagonal_clean_decay,
+            0.0,
+        )
+        self.stats.brake_pressure_percent = max(
+            float(self.stats.brake_pressure_percent) - base_decay - brake_clean_decay,
+            0.0,
+        )
+
+    def _apply_context_key_down(self, input_id: str, action: str, now: float) -> None:
+        if input_id in {"1", "2"}:
+            self._set_strong_context("precision_weapon", now)
+            return
+        if input_id == "3":
+            self._set_strong_context("knife_movement_safe", now)
+            return
+        if input_id == "q":
+            self._set_temporary_context("ability_q", now)
+            return
+        if input_id == "e":
+            if self.temporary_context == "smoke_panel" and self.temporary_context_expires_at > now:
+                self._clear_temporary_context(now)
+            else:
+                self._set_temporary_context("smoke_panel", now)
+            return
+        if input_id == "c":
+            self._set_temporary_context("ability_c", now)
+            return
+        if input_id == "x":
+            self._set_temporary_context("ultimate", now)
+            return
+        if input_id == "f" or action == "interact":
+            self._set_temporary_context("interaction", now)
+            return
+        if input_id == "v":
+            self._set_temporary_context("communication_neutral", now)
+            return
+        if input_id in {"tab", "i", "m"} or action in {"scoreboard", "shop", "map"}:
+            self._set_temporary_context("interface_neutral", now)
+
+    def _apply_context_key_up(self, input_id: str, action: str, now: float) -> None:
+        if self.temporary_context not in {"interface_neutral", "communication_neutral", "interaction"}:
+            return
+        if input_id in {"tab", "i", "m", "v", "f"} or action in {"scoreboard", "shop", "map", "interact"}:
+            self._clear_temporary_context(now)
+
+    def _set_strong_context(self, context: str, now: float) -> None:
+        self.last_strong_context = context
+        self._clear_temporary_context(now)
+
+    def _set_temporary_context(self, context: str, now: float) -> None:
+        timeout = float(self.CONTEXT_TIMEOUTS.get(context, 1.5))
+        self.temporary_context = context
+        self.temporary_context_expires_at = now + timeout
+        self._sync_context_stats(now)
+
+    def _clear_temporary_context(self, now: float) -> None:
+        self.temporary_context = ""
+        self.temporary_context_expires_at = 0.0
+        self._sync_context_stats(now)
+
+    def _expire_temporary_context(self, now: float) -> None:
+        if self.temporary_context and self.temporary_context_expires_at <= now:
+            self.temporary_context = ""
+            self.temporary_context_expires_at = 0.0
+
+    def _classify_lmb(self, now: float) -> str:
+        context = self.effective_input_context(now)
+        if context == "precision_weapon":
+            return "weapon_fire"
+        if context == "smoke_panel":
+            return "smoke_confirm"
+        if context in {"ability_q", "ability_c", "ultimate"}:
+            return "ability_cast"
+        if context == "interaction":
+            return "interaction"
+        return "ignored_safe"
+
+    def _sync_context_stats(self, now: float) -> None:
+        self._expire_temporary_context(now)
+        self.stats.last_strong_context = self.last_strong_context
+        self.stats.temporary_context = self.temporary_context
+        self.stats.effective_input_context = self.temporary_context or self.last_strong_context
+        self.stats.context_expires_in_ms = (
+            int(round(max(self.temporary_context_expires_at - now, 0.0) * 1000))
+            if self.temporary_context
+            else 0
+        )
 
     def _active_state_snapshot(self) -> dict[str, bool]:
         active_ids = set(self.active_state)
@@ -856,10 +1052,19 @@ class InputTimingTracker:
         }
 
     def _register_warning(self, warning_name: str, now: float) -> None:
+        if warning_name in {
+            "diagonal_movement",
+            "fire_while_moving",
+            "fire_while_jumping",
+            "fire_during_unstable_brake",
+            "long_strafe_hold",
+        } and not self.is_combat_context_active(now):
+            return
         self.stats.warning_counts[warning_name] = self.stats.warning_counts.get(warning_name, 0) + 1
         self.warning_latches[warning_name] = now + self.WARNING_LATCH_SECONDS
 
     def _current_warnings(self, now: float) -> list[str]:
+        combat_relevant = self.is_combat_context_active(now)
         warnings: set[str] = {
             name
             for name, expires_at in self.warning_latches.items()
@@ -872,19 +1077,20 @@ class InputTimingTracker:
         }
 
         active = self._active_state_snapshot()
-        if (active.get("w") or active.get("s")) and (active.get("a") or active.get("d")):
+        if combat_relevant and (active.get("w") or active.get("s")) and (active.get("a") or active.get("d")):
             warnings.add("diagonal_movement")
 
-        for state in self.active_state.values():
-            if (
-                state.action in self.LATERAL_ACTIONS
-                and (now - state.started_at) > self.LONG_LATERAL_HOLD_SECONDS
-            ):
-                warnings.add("long_strafe_hold")
-                break
+        if combat_relevant:
+            for state in self.active_state.values():
+                if (
+                    state.action in self.LATERAL_ACTIONS
+                    and (now - state.started_at) > self.LONG_LATERAL_HOLD_SECONDS
+                ):
+                    warnings.add("long_strafe_hold")
+                    break
 
         training_state = self.training_state.snapshot(now).to_dict()
-        if training_state.get("firing"):
+        if combat_relevant and training_state.get("firing"):
             body_state = str(training_state.get("firing_body_state") or "")
             if body_state == "moving":
                 warnings.add("fire_while_moving")

@@ -142,7 +142,10 @@ class AppConfig:
             "c": "ability_c",
             "x": "ultimate",
             "z": "ability_z",
-            "v": "ability_v",
+            "v": "communication",
+            "1": "weapon_slot_1",
+            "2": "weapon_slot_2",
+            "3": "knife_slot",
             "r": "reload",
             "f": "interact",
             "space": "jump",
@@ -279,12 +282,16 @@ class AppConfig:
         if not isinstance(action_map, dict):
             action_map = defaults.input_timing["action_map"]
 
-        normalized_action_map: dict[str, str] = {}
+        normalized_action_map: dict[str, str] = dict(defaults.input_timing["action_map"])
         for key, value in action_map.items():
             key_text = str(key or "").strip()
             value_text = str(value or "").strip()
             if key_text and value_text:
                 normalized_action_map[key_text] = value_text
+        normalized_action_map["v"] = "communication"
+        normalized_action_map["1"] = "weapon_slot_1"
+        normalized_action_map["2"] = "weapon_slot_2"
+        normalized_action_map["3"] = "knife_slot"
 
         if not normalized_action_map:
             normalized_action_map = dict(defaults.input_timing["action_map"])

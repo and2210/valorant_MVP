@@ -176,6 +176,10 @@ class ProtocolTracker:
     def on_input_state_changed(self, context: FireEvaluationContext) -> None:
         if not self.enabled:
             return
+        if not context.combat_relevant:
+            self.diagonal_state_active = False
+            self.strict_diagonal_fault_active = False
+            return
 
         current_time = time.monotonic()
         diagonal_active = bool(context.has_diagonal_active)
@@ -212,9 +216,14 @@ class ProtocolTracker:
     def on_left_click(self, context: FireEvaluationContext) -> None:
         if not self.enabled:
             return
+        if not context.combat_relevant:
+            return
 
         current_time = time.monotonic()
         if current_time < self.cooldown_until:
+            return
+
+        if context.last_lmb_classification != "weapon_fire":
             return
 
         self.cooldown_until = current_time + self.config.post_click_cooldown

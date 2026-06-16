@@ -369,10 +369,16 @@ class OverlayWindow(QWidget):
     @staticmethod
     def _set_pressure_bar(label: QLabel, pressure_percent: float) -> None:
         percent = max(min(pressure_percent, 100.0), 0.0)
+        fill_stop = max(min(percent / 100.0, 1.0), 0.0)
+        empty_stop = min(fill_stop + 0.001, 1.0)
         label.setStyleSheet(
             "border-radius: 3px;"
-            "background-image: none;"
-            f"background-color: rgba(59, 130, 246, {60 + int(percent * 1.5)});"
+            "border: 1px solid rgba(148, 163, 184, 100);"
+            "background-color: rgba(30, 41, 59, 220);"
+            "background-image: "
+            "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            f"stop:0 #3B82F6, stop:{fill_stop:.3f} #3B82F6, "
+            f"stop:{empty_stop:.3f} rgba(30, 41, 59, 220), stop:1 rgba(30, 41, 59, 220));"
             f"min-width: 44px;"
         )
 
