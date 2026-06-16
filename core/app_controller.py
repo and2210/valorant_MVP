@@ -152,6 +152,7 @@ class AppController:
             "warning_counts": dict(input_stats.warning_counts or {}),
             "diagonal_ratio_percent": diagonal_ratio_percent,
             "missed_brake_ratio_percent": missed_brake_ratio_percent,
+            "missed_brake_count": int(input_stats.missed_brake_count),
             "diagonal_pressure_percent": float(input_stats.diagonal_pressure_percent),
             "brake_pressure_percent": float(input_stats.brake_pressure_percent),
             "scroll_events": int(input_stats.scroll_events),

@@ -13,6 +13,7 @@ class OverlayWindow(QWidget):
     UPDATE_INTERVAL_MS = 60
     INPUT_PULSE_MS = 60
     SCROLL_PULSE_MS = 60
+    EVENT_DOT_PULSE_MS = 800
 
     def __init__(
         self,
@@ -29,6 +30,9 @@ class OverlayWindow(QWidget):
         self._last_scroll_jump_events = 0
         self._last_event_counts_by_input: dict[str, int] = {}
         self._pulse_until: dict[str, float] = {}
+        self._diag_event_until = 0.0
+        self._brake_event_until = 0.0
+        self._last_missed_brake_count = 0
         self._scroll_until = 0.0
         self._scroll_jump_until = 0.0
         self._last_refresh_monotonic = 0.0
@@ -57,27 +61,21 @@ class OverlayWindow(QWidget):
 
         status_row = QHBoxLayout()
         status_row.setContentsMargins(0, 0, 0, 0)
-        self.session_dot = QLabel()
-        self.session_dot.setFixedSize(10, 10)
         self.compact_status_label = QLabel("Ready . Deathmatch")
         self.compact_status_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        status_row.addWidget(self.session_dot)
         status_row.addWidget(self.compact_status_label, stretch=1)
-        panel_layout.addLayout(status_row)
-
-        ratio_row = QHBoxLayout()
-        ratio_row.setContentsMargins(0, 0, 0, 0)
-        ratio_row.setSpacing(8)
-        ratio_row.addWidget(QLabel("Diag"))
+        status_row.addWidget(QLabel("Diag"))
         self.diag_ratio_dot = QLabel()
         self.diag_ratio_dot.setFixedSize(10, 10)
-        ratio_row.addWidget(self.diag_ratio_dot)
-        ratio_row.addWidget(QLabel("Brake"))
+        status_row.addWidget(self.diag_ratio_dot)
+        status_row.addWidget(QLabel("Brake"))
         self.brake_ratio_dot = QLabel()
         self.brake_ratio_dot.setFixedSize(10, 10)
-        ratio_row.addWidget(self.brake_ratio_dot)
-        ratio_row.addStretch(1)
-        panel_layout.addLayout(ratio_row)
+        status_row.addWidget(self.brake_ratio_dot)
+        self.session_dot = QLabel()
+        self.session_dot.setFixedSize(10, 10)
+        status_row.addWidget(self.session_dot)
+        panel_layout.addLayout(status_row)
 
         keys = QGridLayout()
         keys.setContentsMargins(0, 0, 0, 0)
@@ -274,14 +272,16 @@ class OverlayWindow(QWidget):
             "session_mode": str(snapshot.get("session_mode") or "deathmatch"),
             "input_state": dict(snapshot.get("input_state") or {}),
             "current_warnings": list(snapshot.get("current_warnings") or []),
-            "diagonal_ratio_percent": float(snapshot.get("diagonal_ratio_percent") or 0.0),
-            "missed_brake_ratio_percent": float(snapshot.get("missed_brake_ratio_percent") or 0.0),
+            "diagonal_active": self._is_diagonal_active(snapshot),
+            "missed_brake_count": int(snapshot.get("missed_brake_count") or 0),
             "diagonal_pressure_percent": float(snapshot.get("diagonal_pressure_percent") or 0.0),
             "brake_pressure_percent": float(snapshot.get("brake_pressure_percent") or 0.0),
             "pulse_active": {
                 key: bool(expires_at > now)
                 for key, expires_at in self._pulse_until.items()
             },
+            "diag_event_active": bool(self._diag_event_until > now),
+            "brake_event_active": bool(self._brake_event_until > now),
             "scroll_active": bool(self._scroll_until > now),
             "scroll_jump_active": bool(self._scroll_jump_until > now),
         }
@@ -306,8 +306,19 @@ class OverlayWindow(QWidget):
             f"background-color: {'#22C55E' if active else '#EF4444'};"
         )
         self.compact_status_label.setText(f"{status} . {mode_label}")
-        self._set_ratio_dot(self.diag_ratio_dot, float(state.get("diagonal_ratio_percent") or 0.0))
-        self._set_ratio_dot(self.brake_ratio_dot, float(state.get("missed_brake_ratio_percent") or 0.0))
+        diag_active = bool(state.get("diagonal_active", False))
+        missed_brake_count = int(state.get("missed_brake_count") or 0)
+        diag_latched = bool(state.get("diag_event_active", False))
+        brake_latched = bool(state.get("brake_event_active", False))
+        if diag_active:
+            self._diag_event_until = time.monotonic() + (self.EVENT_DOT_PULSE_MS / 1000.0)
+            diag_latched = True
+        if missed_brake_count > self._last_missed_brake_count:
+            self._brake_event_until = time.monotonic() + (self.EVENT_DOT_PULSE_MS / 1000.0)
+            brake_latched = True
+        self._last_missed_brake_count = missed_brake_count
+        self._set_event_dot(self.diag_ratio_dot, diag_active, diag_latched)
+        self._set_event_dot(self.brake_ratio_dot, False, brake_latched)
         self._set_pressure_bar(self.diag_pressure_bar, float(state.get("diagonal_pressure_percent") or 0.0))
         self._set_pressure_bar(self.brake_pressure_bar, float(state.get("brake_pressure_percent") or 0.0))
 
@@ -341,17 +352,19 @@ class OverlayWindow(QWidget):
         )
 
     @staticmethod
-    def _set_ratio_dot(label: QLabel, ratio_percent: float) -> None:
-        if ratio_percent < 33.0:
-            color = "#22C55E"
-        elif ratio_percent <= 66.0:
-            color = "#FACC15"
-        else:
-            color = "#EF4444"
+    def _set_event_dot(label: QLabel, active_now: bool, latched: bool) -> None:
+        color = "#EF4444" if (active_now or latched) else "#22C55E"
         label.setStyleSheet(
             "border-radius: 5px;"
             f"background-color: {color};"
         )
+
+    @staticmethod
+    def _is_diagonal_active(snapshot: dict[str, Any]) -> bool:
+        input_state = dict(snapshot.get("input_state") or {})
+        forward_back = bool(input_state.get("w", False)) or bool(input_state.get("s", False))
+        lateral = bool(input_state.get("a", False)) or bool(input_state.get("d", False))
+        return forward_back and lateral
 
     @staticmethod
     def _set_pressure_bar(label: QLabel, pressure_percent: float) -> None:

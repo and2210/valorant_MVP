@@ -68,7 +68,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.22.6"
+    APP_VERSION = "v0.22.6.1"
 
     def __init__(self) -> None:
         super().__init__()
