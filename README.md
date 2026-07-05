@@ -1,5 +1,27 @@
 # MVP APP — Radiante Desktop Foundation v0.20.1
 
+## VOD Analyzer local
+
+A aba `VOD Analyzer` processa gravações dentro de uma raiz escolhida pelo usuário.
+Os MP4 originais são tratados como somente leitura; cache, calibrações e relatórios
+ficam em pastas separadas sob essa raiz.
+
+Fluxo do MVP:
+
+1. escolha a raiz e coloque gravações em `Entrada/DM` ou `Entrada/Ranked`;
+2. clique em `Inspecionar` para executar FFprobe e agrupar as sessões;
+3. selecione uma sessão e calibre as regiões A, D e LMB;
+4. execute `Analisar localmente` para gerar CSV, JSON, Markdown e evidências.
+
+A análise também produz `timeline.json`, com timestamps locais e globais por parte,
+e `analysis_windows.json`, contendo somente as janelas selecionadas para inspeção
+frame a frame. Marcadores manuais podem indicar notas, início/fim de rounds e
+duelos para revisão. A transcrição local é opcional e só transforma frases com os
+termos configurados em marcadores temporais; ela não interpreta intenção.
+
+Arquivos recentes ou inválidos não são analisados. Em vídeos de 30 FPS, a precisão
+temporal observável é de aproximadamente 33 ms. Nenhum dado é enviado para API.
+
 Versão focada em fundação de input timing.
 
 ## Como rodar em desenvolvimento

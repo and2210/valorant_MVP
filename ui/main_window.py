@@ -55,6 +55,7 @@ from core.tracker_importer import (
 )
 from ui.screens.history_screen import HistoryScreen
 from ui.screens.inventory_screen import InventoryScreen, WeaponButton
+from ui.screens.vod_analyzer_screen import VodAnalyzerScreen
 from ui.overlay_window import OverlayWindow
 
 
@@ -68,7 +69,7 @@ class GuiSignals(QObject):
 class MainWindow(QWidget):
     LIVE_UPDATE_INTERVAL_MS = 400
     ACTIVE_SESSION_UPDATE_INTERVAL_MS = 1000
-    APP_VERSION = "v0.22.7"
+    APP_VERSION = "v0.23.0"
 
     def __init__(self) -> None:
         super().__init__()
@@ -122,6 +123,7 @@ class MainWindow(QWidget):
             ("game_modes", "Game Modes"),
             ("inventory", "Inventory"),
             ("history", "History"),
+            ("vod_analyzer", "VOD Analyzer"),
             ("settings", "Settings"),
         ]:
             button = QPushButton(label)
@@ -142,9 +144,10 @@ class MainWindow(QWidget):
             "game_modes": self._build_game_modes_shell(),
             "inventory": self._build_inventory_shell(),
             "history": self._build_history_shell(),
+            "vod_analyzer": VodAnalyzerScreen(),
             "settings": self._build_settings_shell(),
         }
-        self.main_page_order = ["game_modes", "inventory", "history", "settings"]
+        self.main_page_order = ["game_modes", "inventory", "history", "vod_analyzer", "settings"]
         for key in self.main_page_order:
             self.main_stack.addWidget(self.main_pages[key])
         layout.addWidget(self.main_stack)

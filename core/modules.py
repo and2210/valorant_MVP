@@ -18,8 +18,8 @@ FUTURE_MODULES: tuple[AppModule, ...] = (
     ),
     AppModule(
         name="Match Analysis",
-        status="Not installed",
-        description="Imported-match analysis will live outside the core training flow.",
+        status="Installed (local MVP)",
+        description="VOD Analyzer processes local recordings and exports objective evidence packages.",
     ),
     AppModule(
         name="Coach/Analyst",

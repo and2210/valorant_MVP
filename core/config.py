@@ -162,6 +162,23 @@ class AppConfig:
             "mouse_x2": "mouse_extra",
         },
     })
+    vod_analyzer: dict[str, Any] = field(default_factory=lambda: {
+        "root": "",
+        "ffmpeg": "ffmpeg",
+        "ffprobe": "ffprobe",
+        "calibration": "",
+        "expected_width": 1280,
+        "expected_height": 720,
+        "expected_fps": 30.0,
+        "maximum_images": 40,
+        "frame_window_before_ms": 3000,
+        "frame_window_after_ms": 2000,
+        "voice_model": "small",
+        "voice_language": "pt",
+        "voice_marker_terms": ["analisar", "analisa", "por que", "marcar", "marca"],
+        "api_enabled": False,
+        "debug": False,
+    })
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
@@ -332,6 +349,30 @@ class AppConfig:
             overlay_custom_x = None
             overlay_custom_y = None
 
+        vod_analyzer = data.get("vod_analyzer", defaults.vod_analyzer)
+        if not isinstance(vod_analyzer, dict):
+            vod_analyzer = defaults.vod_analyzer
+        normalized_vod_analyzer = dict(defaults.vod_analyzer)
+        normalized_vod_analyzer.update(vod_analyzer)
+        normalized_vod_analyzer["root"] = str(normalized_vod_analyzer.get("root") or "").strip()
+        normalized_vod_analyzer["ffmpeg"] = str(normalized_vod_analyzer.get("ffmpeg") or "ffmpeg").strip()
+        normalized_vod_analyzer["ffprobe"] = str(normalized_vod_analyzer.get("ffprobe") or "ffprobe").strip()
+        normalized_vod_analyzer["calibration"] = str(normalized_vod_analyzer.get("calibration") or "").strip()
+        normalized_vod_analyzer["expected_width"] = max(_to_int(normalized_vod_analyzer.get("expected_width"), 1280), 1)
+        normalized_vod_analyzer["expected_height"] = max(_to_int(normalized_vod_analyzer.get("expected_height"), 720), 1)
+        normalized_vod_analyzer["expected_fps"] = max(_to_float(normalized_vod_analyzer.get("expected_fps"), 30.0), 1.0)
+        normalized_vod_analyzer["maximum_images"] = min(max(_to_int(normalized_vod_analyzer.get("maximum_images"), 40), 0), 200)
+        normalized_vod_analyzer["frame_window_before_ms"] = min(max(_to_int(normalized_vod_analyzer.get("frame_window_before_ms"), 3000), 0), 30000)
+        normalized_vod_analyzer["frame_window_after_ms"] = min(max(_to_int(normalized_vod_analyzer.get("frame_window_after_ms"), 2000), 0), 30000)
+        normalized_vod_analyzer["voice_model"] = str(normalized_vod_analyzer.get("voice_model") or "small").strip()
+        normalized_vod_analyzer["voice_language"] = str(normalized_vod_analyzer.get("voice_language") or "pt").strip()
+        marker_terms = normalized_vod_analyzer.get("voice_marker_terms", defaults.vod_analyzer["voice_marker_terms"])
+        if not isinstance(marker_terms, list):
+            marker_terms = defaults.vod_analyzer["voice_marker_terms"]
+        normalized_vod_analyzer["voice_marker_terms"] = [str(term).strip().lower() for term in marker_terms if str(term).strip()]
+        normalized_vod_analyzer["api_enabled"] = bool(normalized_vod_analyzer.get("api_enabled", False))
+        normalized_vod_analyzer["debug"] = bool(normalized_vod_analyzer.get("debug", False))
+
         return cls(
             episode_timeout=_to_float(data.get("episode_timeout"), defaults.episode_timeout),
             post_click_cooldown=_to_float(data.get("post_click_cooldown"), defaults.post_click_cooldown),
@@ -374,6 +415,7 @@ class AppConfig:
                 data.get("overlay_minimal_mode", defaults.overlay_minimal_mode)
             ),
             input_timing=normalized_input_timing,
+            vod_analyzer=normalized_vod_analyzer,
         )
 
     def to_dict(self) -> dict[str, Any]:
